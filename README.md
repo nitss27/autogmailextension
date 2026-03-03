@@ -43,6 +43,12 @@ A Manifest V3 extension that automates Gmail compose and sends emails **one-by-o
 - Ensure the sheet is accessible as CSV export (public/published as needed).
 - Paste the Google Sheet URL in popup once; it is saved.
 
+### If you see "Failed to fetch"
+
+- Ensure the sheet is shared/published so CSV export is accessible.
+- Keep a `gid` in the URL when targeting a specific tab.
+- The extension now tries multiple CSV endpoints (`/export?format=csv` and `gviz/tq?tqx=out:csv`) automatically.
+
 ## Notes
 
 - Gmail may block risky attachment types for security.

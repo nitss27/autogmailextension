@@ -80,12 +80,55 @@ async function fetchSheetRows(sheetUrl) {
   const sheetId = extractSheetId(sheetUrl);
   if (!sheetId) throw new Error("Invalid Google Sheet URL");
   const gid = extractGid(sheetUrl);
-  const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`;
-  const resp = await fetch(csvUrl, { credentials: "include" });
-  if (!resp.ok) throw new Error(`Failed to fetch sheet CSV: ${resp.status}`);
-  const text = await resp.text();
+  const csvCandidates = buildCsvCandidates(sheetUrl, sheetId, gid);
+
+  let text = null;
+  const attempts = [];
+  for (const csvUrl of csvCandidates) {
+    try {
+      const resp = await fetch(csvUrl, { credentials: "include" });
+      const body = await resp.text();
+      if (!resp.ok) {
+        attempts.push(`${resp.status} @ ${csvUrl}`);
+        continue;
+      }
+      if (body.includes("<!DOCTYPE html") || body.includes("<html")) {
+        attempts.push(`non-CSV response @ ${csvUrl}`);
+        continue;
+      }
+      text = body;
+      break;
+    } catch (err) {
+      attempts.push(`${err.message} @ ${csvUrl}`);
+    }
+  }
+
+  if (!text) {
+    throw new Error(
+      `Failed to fetch sheet CSV. Make sure the sheet is shared/published and try a URL with gid. Details: ${attempts.slice(
+        0,
+        2
+      ).join(" | ")}`
+    );
+  }
+
   const parsed = parseRowsWithMeta(text);
   return { ...parsed, sheetId, gid };
+}
+
+function buildCsvCandidates(sheetUrl, sheetId, gid) {
+  const urls = new Set();
+  urls.add(`https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`);
+  urls.add(`https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&gid=${gid}`);
+
+  const cleaned = sheetUrl.trim();
+  if (cleaned.includes("output=csv")) {
+    urls.add(cleaned);
+  } else if (cleaned.includes("/pub?")) {
+    urls.add(cleaned.replace("/pub?", "/pub?output=csv&"));
+  }
+
+  return Array.from(urls);
 }
 
 function rowKey(row) {
