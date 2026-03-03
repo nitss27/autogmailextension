@@ -1,6 +1,7 @@
 const EMAIL_REGEX = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
-const TAB_LOAD_TIMEOUT_MS = 25000;
-const TAB_ACTIVATION_SETTLE_MS = 700;
+const TAB_LOAD_TIMEOUT_MS = 20000;
+const TAB_ACTIVATION_SETTLE_MS = 250;
+const CONTACT_SOURCE_CONCURRENCY = 4;
 
 function normalizeUrl(input) {
   const raw = input.trim();
@@ -54,6 +55,16 @@ async function fetchPage(url) {
 
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return response.text();
+}
+
+async function fetchSourceEmails(url) {
+  // Raw HTTP response body is equivalent to page source and is more reliable/faster
+  // than automating a `view-source:` browser page.
+  const html = await fetchPage(url);
+  return {
+    sourceHtml: html,
+    sourceEmails: extractEmailsFromText(html)
+  };
 }
 
 function createTab(url) {
@@ -143,51 +154,42 @@ async function inspectRegularPage(tabId) {
   return injection?.result || { pageUrl: '', html: '', emails: [], contactLinks: [] };
 }
 
-async function extractEmailsFromViewSource(url) {
-  const viewSourceUrl = `view-source:${url}`;
-  let tab = null;
+async function mapWithConcurrency(items, limit, mapper) {
+  const results = new Array(items.length);
+  let index = 0;
 
-  try {
-    tab = await createTab(viewSourceUrl);
-    await waitForTabComplete(tab.id);
-
-    const [injection] = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: () => document.body?.innerText || document.documentElement?.innerText || ''
-    });
-
-    return extractEmailsFromText(injection?.result || '');
-  } catch {
-    return [];
-  } finally {
-    await closeTab(tab?.id);
+  async function worker() {
+    while (index < items.length) {
+      const currentIndex = index;
+      index += 1;
+      results[currentIndex] = await mapper(items[currentIndex], currentIndex);
+    }
   }
+
+  const workers = Array.from({ length: Math.min(limit, items.length) }, () => worker());
+  await Promise.all(workers);
+  return results;
 }
 
 async function buildResultFromInspected(url, inspected) {
-  const fetchedHomeHtml = await fetchPage(url).catch(() => inspected.html);
+  const homeSource = await fetchSourceEmails(url).catch(() => ({ sourceHtml: inspected.html, sourceEmails: extractEmailsFromText(inspected.html) }));
 
   const renderedEmails = unique([...inspected.emails, ...extractEmailsFromText(inspected.html)]);
 
   const contactLinks = unique([
     ...inspected.contactLinks,
     ...extractContactLinksFromHtml(inspected.html, inspected.pageUrl || url),
-    ...extractContactLinksFromHtml(fetchedHomeHtml, url)
+    ...extractContactLinksFromHtml(homeSource.sourceHtml, url)
   ]);
 
-  const homeSourceFromView = await extractEmailsFromViewSource(url);
-
-  const contactSourceNested = [];
-  for (const contactUrl of contactLinks) {
-    const fromFetch = await fetchPage(contactUrl).then(extractEmailsFromText).catch(() => []);
-    const fromViewSource = await extractEmailsFromViewSource(contactUrl);
-    contactSourceNested.push(unique([...fromFetch, ...fromViewSource]));
-  }
+  const contactEmailGroups = await mapWithConcurrency(contactLinks, CONTACT_SOURCE_CONCURRENCY, async (contactUrl) => {
+    const contactSource = await fetchSourceEmails(contactUrl).catch(() => ({ sourceHtml: '', sourceEmails: [] }));
+    return unique([...contactSource.sourceEmails, ...extractEmailsFromText(contactSource.sourceHtml)]);
+  });
 
   const sourceEmails = unique([
-    ...extractEmailsFromText(fetchedHomeHtml),
-    ...homeSourceFromView,
-    ...contactSourceNested.flat()
+    ...homeSource.sourceEmails,
+    ...contactEmailGroups.flat()
   ]);
 
   const emails = unique([...renderedEmails, ...sourceEmails]);

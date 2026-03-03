@@ -8,9 +8,9 @@ For each website you provide:
 
 1. Opens all sites in a batch first (e.g. 5 tabs), auto-switches to each tab to let DOM settle, extracts emails, then closes them.
 2. Extracts emails from rendered DOM/page content.
-3. Opens `view-source:` for the home page and extracts source emails.
+3. Extracts home-page source emails from raw page source (view-source equivalent).
 4. Finds contact links (`href` includes `contact`).
-5. Opens/fetches contact pages and visits each `view-source:` page one-by-one to extract emails before moving on.
+5. Fetches each contact page source and extracts emails (same data as view-source, faster and more reliable).
 6. Exports **Rendered Emails**, **Source Emails**, and **All Emails** (merged/deduped).
 7. Runs fully automatic until all batches are complete.
 
