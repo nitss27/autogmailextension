@@ -85,6 +85,14 @@ function findSendButton(root) {
   );
 }
 
+
+function isSendButtonEnabled(btn) {
+  if (!btn) return false;
+  const ariaDisabled = btn.getAttribute("aria-disabled") === "true";
+  const classDisabled = btn.classList.contains("T-I-JW");
+  return !ariaDisabled && !classDisabled;
+}
+
 function formatBodyToHtml(text) {
   const bodyText = String(text || "");
   const trimmed = bodyText.trim();
@@ -189,20 +197,46 @@ async function sendSingle(row, attachment) {
     await attachFile(root, attachment);
   }
 
-  const sendBtn = await waitFor(() => findSendButton(root), 5000, 70);
-  if (!sendBtn) throw new Error("Send button not found");
+  await sleep(250);
+  const sendBtn = await waitFor(() => {
+    const btn = findSendButton(root);
+    return isSendButtonEnabled(btn) ? btn : null;
+  }, 6000, 80);
+  if (!sendBtn) throw new Error("Send button is not ready (check To/Subject/body)");
+
   sendBtn.click();
 
-  const closed = await waitForNoComposeDialog(5000, 90);
-  if (!closed) {
-    await waitFor(
+  const sent = await waitFor(
+    () => {
+      const messageSentToast = document.querySelector("span.bAq");
+      const gone = !document.contains(root);
+      if (gone) return true;
+      if (messageSentToast && /message sent/i.test(messageSentToast.textContent || "")) return true;
+      return null;
+    },
+    6000,
+    90
+  );
+
+  if (!sent) {
+    bodyBox.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, ctrlKey: true, bubbles: true })
+    );
+    const sentAfterFallback = await waitFor(
       () => {
         const messageSentToast = document.querySelector("span.bAq");
-        return messageSentToast && /message sent/i.test(messageSentToast.textContent || "");
+        const gone = !document.contains(root);
+        if (gone) return true;
+        if (messageSentToast && /message sent/i.test(messageSentToast.textContent || "")) return true;
+        return null;
       },
-      2500,
+      4500,
       90
     );
+
+    if (!sentAfterFallback) {
+      throw new Error("Send did not complete for this row");
+    }
   }
 }
 
