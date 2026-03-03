@@ -22,24 +22,28 @@
         <input id="to" type="text" placeholder="person@example.com" />
         <label for="subject">Subject</label>
         <input id="subject" type="text" placeholder="Application for role" />
-        <label for="body">Body (supports **bold**, __underline__, and - bullets)</label>
+        <label for="body">Body (HTML supported + **bold**, __underline__, and - bullets)</label>
         <textarea id="body" rows="5" placeholder="Hello...\n- item"></textarea>
       </section>
 
       <section id="pasteFields" class="mode-block hidden">
-        <label for="rows">Paste rows with headers: to,subject,body[,sent]</label>
-        <textarea id="rows" rows="8" placeholder="to,subject,body,sent"></textarea>
+        <label for="rows">Paste rows with headers: to,subject,body[,sent,attach]</label>
+        <textarea id="rows" rows="8" placeholder="to,subject,body,sent,attach"></textarea>
       </section>
 
       <section id="sheetFields" class="mode-block hidden">
         <label for="sheetUrl">Google Sheet URL (saved)</label>
         <input id="sheetUrl" type="url" placeholder="https://docs.google.com/spreadsheets/d/..." />
+        <p class="note">Sheet mode uses only the sheet's <code>sent</code> column (no local sent tracking).</p>
       </section>
 
       <label for="sendLimit">Send limit per run (saved, blank = all)</label>
       <input id="sendLimit" type="number" min="1" step="1" placeholder="e.g. 20" />
 
-      <label for="resumeFile">Attachment (resume)</label>
+      <label class="check"><input id="enableAttachment" type="checkbox" checked /> Enable attachment</label>
+      <label class="check"><input id="sheetAttachRule" type="checkbox" checked /> In sheet mode, attach only when row column <code>attach</code> is YES</label>
+
+      <label for="resumeFile">Attachment file</label>
       <input id="resumeFile" type="file" accept=".pdf,.doc,.docx,.txt" />
 
       <div class="actions">

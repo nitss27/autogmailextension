@@ -86,7 +86,14 @@ function findSendButton(root) {
 }
 
 function formatBodyToHtml(text) {
-  let escaped = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const bodyText = String(text || "");
+  const trimmed = bodyText.trim();
+
+  if (/<\/?[a-z][\s\S]*>/i.test(trimmed)) {
+    return trimmed;
+  }
+
+  let escaped = bodyText.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
   escaped = escaped.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
   escaped = escaped.replace(/__(.+?)__/g, "<u>$1</u>");
@@ -127,8 +134,6 @@ function dataUrlToFile(dataUrl, fileName, mimeType) {
 async function attachFile(root, attachment) {
   let input = await waitFor(() => findFileInput(root), 1200, 70);
 
-  // Prefer direct file-input injection so the OS file picker does not open.
-  // Gmail usually keeps Filedata input in the compose DOM even when hidden.
   if (!input) {
     const attachBtn = findAttachButton(root);
     if (!attachBtn) throw new Error("Attachment button not found");
@@ -180,7 +185,9 @@ async function sendSingle(row, attachment) {
   bodyBox.innerHTML = formatBodyToHtml(row.body);
   bodyBox.dispatchEvent(new Event("input", { bubbles: true }));
 
-  await attachFile(root, attachment);
+  if (row.shouldAttach && attachment) {
+    await attachFile(root, attachment);
+  }
 
   const sendBtn = await waitFor(() => findSendButton(root), 5000, 70);
   if (!sendBtn) throw new Error("Send button not found");
@@ -213,8 +220,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const rows = message.payload?.rows || [];
     const attachment = message.payload?.attachment;
 
-    if (!rows.length || !attachment?.dataUrl) {
-      throw new Error("Missing rows or attachment");
+    if (!rows.length) {
+      throw new Error("Missing rows");
+    }
+
+    if (rows.some((row) => row.shouldAttach) && !attachment?.dataUrl) {
+      throw new Error("Rows require attachment but no attachment payload provided");
     }
 
     const sentRows = [];

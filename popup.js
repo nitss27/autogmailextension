@@ -8,12 +8,15 @@ const bodyEl = document.getElementById("body");
 const rowsEl = document.getElementById("rows");
 const sheetUrlEl = document.getElementById("sheetUrl");
 const sendLimitEl = document.getElementById("sendLimit");
+const enableAttachmentEl = document.getElementById("enableAttachment");
+const sheetAttachRuleEl = document.getElementById("sheetAttachRule");
 const resumeEl = document.getElementById("resumeFile");
 const runBtn = document.getElementById("runBtn");
 const clearBtn = document.getElementById("clearBtn");
 const statusEl = document.getElementById("status");
 
 const SENT_VALUES = new Set(["yes", "true", "sent", "1", "done"]);
+const ATTACH_VALUES = new Set(["yes", "true", "attach", "1", "y"]);
 
 function setStatus(msg) {
   statusEl.textContent = msg;
@@ -24,6 +27,12 @@ function toggleMode() {
   singleFields.classList.toggle("hidden", mode !== "single");
   pasteFields.classList.toggle("hidden", mode !== "paste");
   sheetFields.classList.toggle("hidden", mode !== "sheet");
+}
+
+function toggleAttachmentUi() {
+  const enabled = enableAttachmentEl.checked;
+  resumeEl.disabled = !enabled;
+  sheetAttachRuleEl.disabled = !enabled;
 }
 
 function splitCsvLine(line) {
@@ -65,9 +74,7 @@ function parseDelimitedRows(inputText) {
   if (!lines.length) return { delimiter: ",", matrix: [] };
 
   const delimiter = lines[0].includes("\t") ? "\t" : ",";
-  const matrix = lines.map((line) =>
-    delimiter === "\t" ? line.split("\t") : splitCsvLine(line)
-  );
+  const matrix = lines.map((line) => (delimiter === "\t" ? line.split("\t") : splitCsvLine(line)));
 
   return { delimiter, matrix };
 }
@@ -93,7 +100,10 @@ function parseRowsWithMeta(inputText) {
     to: headers.indexOf("to"),
     subject: headers.indexOf("subject"),
     body: headers.indexOf("body"),
-    sent: headers.indexOf("sent")
+    sent: headers.indexOf("sent"),
+    attach: ["attach", "attachment", "send_attachment", "with_attachment"]
+      .map((h) => headers.indexOf(h))
+      .find((v) => v >= 0) ?? -1
   };
 
   if (idx.to < 0 || idx.subject < 0 || idx.body < 0) {
@@ -104,12 +114,14 @@ function parseRowsWithMeta(inputText) {
     .slice(1)
     .map((cols, i) => {
       const sentVal = idx.sent >= 0 ? String(cols[idx.sent] || "").trim().toLowerCase() : "";
+      const attachVal = idx.attach >= 0 ? String(cols[idx.attach] || "").trim().toLowerCase() : "";
       return {
         rowNumber: i + 2,
         to: String(cols[idx.to] || "").trim(),
         subject: String(cols[idx.subject] || "").trim(),
         body: String(cols[idx.body] || "").trim(),
-        sent: SENT_VALUES.has(sentVal)
+        sent: SENT_VALUES.has(sentVal),
+        attachAllowed: ATTACH_VALUES.has(attachVal)
       };
     })
     .filter((r) => r.to && r.subject && r.body);
@@ -119,7 +131,8 @@ function parseRowsWithMeta(inputText) {
     meta: {
       delimiter,
       sentColumnIndex: idx.sent,
-      sentColumnLetter: columnLetterFromIndex(idx.sent)
+      sentColumnLetter: columnLetterFromIndex(idx.sent),
+      attachColumnIndex: idx.attach
     }
   };
 }
@@ -132,6 +145,21 @@ function extractSheetId(url) {
 function extractGid(url) {
   const match = url.match(/[?&#]gid=(\d+)/);
   return match ? match[1] : "0";
+}
+
+function buildCsvCandidates(sheetUrl, sheetId, gid) {
+  const urls = new Set();
+  urls.add(`https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`);
+  urls.add(`https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&gid=${gid}`);
+
+  const cleaned = sheetUrl.trim();
+  if (cleaned.includes("output=csv")) {
+    urls.add(cleaned);
+  } else if (cleaned.includes("/pub?")) {
+    urls.add(cleaned.replace("/pub?", "/pub?output=csv&"));
+  }
+
+  return Array.from(urls);
 }
 
 async function fetchSheetRows(sheetUrl) {
@@ -172,25 +200,6 @@ async function fetchSheetRows(sheetUrl) {
 
   const parsed = parseRowsWithMeta(text);
   return { ...parsed, sheetId, gid };
-}
-
-function buildCsvCandidates(sheetUrl, sheetId, gid) {
-  const urls = new Set();
-  urls.add(`https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`);
-  urls.add(`https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&gid=${gid}`);
-
-  const cleaned = sheetUrl.trim();
-  if (cleaned.includes("output=csv")) {
-    urls.add(cleaned);
-  } else if (cleaned.includes("/pub?")) {
-    urls.add(cleaned.replace("/pub?", "/pub?output=csv&"));
-  }
-
-  return Array.from(urls);
-}
-
-function rowKey(row) {
-  return `${row.to}||${row.subject}||${row.body}`;
 }
 
 async function getStorage(keys) {
@@ -250,16 +259,13 @@ async function writeYesToSheetSentColumn(sheetSource, sentRows) {
   if (!updated) {
     return {
       updated,
-      warning:
-        "Could not write YES back to sheet sent column via gviz endpoint. Local sent tracking is still saved."
+      warning: "Could not write YES back to sheet sent column via gviz endpoint."
     };
   }
 
   return {
     updated,
-    warning: updateWarnings.length
-      ? `Some sent marks failed for rows: ${updateWarnings.join(", ")}. Local sent tracking still applied.`
-      : null
+    warning: updateWarnings.length ? `Some sent marks failed for rows: ${updateWarnings.join(", ")}.` : null
   };
 }
 
@@ -267,16 +273,16 @@ async function run() {
   setStatus("Preparing data...");
   const mode = modeEl.value;
   const sendLimit = Number(sendLimitEl.value) || null;
+  const enableAttachment = enableAttachmentEl.checked;
+  const sheetAttachRule = sheetAttachRuleEl.checked;
 
   await setStorage({
     savedSheetUrl: sheetUrlEl.value.trim(),
     savedSendLimit: sendLimitEl.value.trim(),
-    savedMode: mode
+    savedMode: mode,
+    savedEnableAttachment: enableAttachment,
+    savedSheetAttachRule: sheetAttachRule
   });
-
-  const attachment = resumeEl.files[0];
-  if (!attachment) throw new Error("Attachment is required");
-  const attachmentDataUrl = await fileToDataUrl(attachment);
 
   let rows = [];
   const sheetUrl = sheetUrlEl.value.trim();
@@ -289,54 +295,69 @@ async function run() {
         to: toEl.value.trim(),
         subject: subjectEl.value.trim(),
         body: bodyEl.value.trim(),
-        sent: false
+        sent: false,
+        shouldAttach: enableAttachment
       }
     ];
   } else if (mode === "paste") {
-    rows = parseRowsWithMeta(rowsEl.value).rows;
+    const parsed = parseRowsWithMeta(rowsEl.value);
+    rows = parsed.rows.map((row) => ({
+      ...row,
+      shouldAttach: enableAttachment && (!sheetAttachRule || row.attachAllowed)
+    }));
   } else {
     if (!sheetUrl) throw new Error("Sheet URL is required");
     const sheetData = await fetchSheetRows(sheetUrl);
-    rows = sheetData.rows;
+    rows = sheetData.rows.map((row) => ({
+      ...row,
+      shouldAttach: enableAttachment && (!sheetAttachRule || row.attachAllowed)
+    }));
     sourceInfo = {
       type: "sheet",
-      sheetUrl,
       sheetId: sheetData.sheetId,
       gid: sheetData.gid,
-      sentColumnLetter: sheetData.meta?.sentColumnLetter
+      sentColumnLetter: sheetData.meta?.sentColumnLetter,
+      hasAttachColumn: sheetData.meta?.attachColumnIndex >= 0
     };
   }
 
   if (!rows.length) throw new Error("No rows found to send");
 
-  const storage = await getStorage(["sheetSentRowsByUrl"]);
-  const sentMap = storage.sheetSentRowsByUrl || {};
-  const localSent = sourceInfo ? new Set(sentMap[sheetUrl] || []) : new Set();
+  let pending = rows.filter((row) => !row.sent);
+  if (sendLimit) pending = pending.slice(0, sendLimit);
 
-  let pending = rows.filter((row) => !row.sent && !localSent.has(rowKey(row)));
-  if (sendLimit) {
-    pending = pending.slice(0, sendLimit);
+  if (!pending.length) {
+    throw new Error(`Nothing to send (all ${rows.length} rows already marked sent in sheet/data).`);
   }
 
-  const skippedCount = rows.length - pending.length;
-  if (!pending.length) {
-    throw new Error(
-      `Nothing to send (total rows: ${rows.length}, skipped already-sent: ${skippedCount}). Check sent column values.`
-    );
+  const needsAttachment = pending.some((row) => row.shouldAttach);
+  let attachmentPayload = null;
+
+  if (needsAttachment) {
+    const attachment = resumeEl.files[0];
+    if (!attachment) throw new Error("Attachment is enabled and required by row rules, but no file selected");
+    attachmentPayload = {
+      name: attachment.name,
+      type: attachment.type || "application/octet-stream",
+      dataUrl: await fileToDataUrl(attachment)
+    };
   }
 
   const tab = await getActiveGmailTab();
-  setStatus(`Parsed ${rows.length} row(s). Sending ${pending.length} email(s)...`);
+  const attachInfo = enableAttachment
+    ? sourceInfo && sheetAttachRule
+      ? sourceInfo.hasAttachColumn
+        ? "sheet attach rule enabled"
+        : "sheet attach rule enabled but no attach column found (no rows will attach)"
+      : "attachment enabled"
+    : "attachment disabled";
+  setStatus(`Parsed ${rows.length} row(s). Sending ${pending.length} email(s)... (${attachInfo})`);
 
   const response = await chrome.tabs.sendMessage(tab.id, {
     type: "RUN_BATCH_SEND",
     payload: {
       rows: pending,
-      attachment: {
-        name: attachment.name,
-        type: attachment.type || "application/octet-stream",
-        dataUrl: attachmentDataUrl
-      }
+      attachment: attachmentPayload
     }
   });
 
@@ -345,13 +366,6 @@ async function run() {
   }
 
   if (sourceInfo) {
-    const updated = new Set(sentMap[sheetUrl] || []);
-    for (const sentRow of response.sentRows || []) {
-      updated.add(rowKey(sentRow));
-    }
-    sentMap[sheetUrl] = Array.from(updated);
-    await setStorage({ sheetSentRowsByUrl: sentMap });
-
     const writeback = await writeYesToSheetSentColumn(sourceInfo, response.sentRows || []);
     const base = `Done. Sent ${response.sentCount} email(s).`;
     const wb = writeback.updated ? ` Sheet writeback YES updated: ${writeback.updated}.` : "";
@@ -363,21 +377,24 @@ async function run() {
   setStatus(`Done. Sent ${response.sentCount} email(s).`);
 }
 
-modeEl.addEventListener("change", () => {
-  toggleMode();
-});
+modeEl.addEventListener("change", toggleMode);
+enableAttachmentEl.addEventListener("change", toggleAttachmentUi);
 
 clearBtn.addEventListener("click", async () => {
   await setStorage({
     savedSheetUrl: "",
     savedSendLimit: "",
-    sheetSentRowsByUrl: {},
-    savedMode: "single"
+    savedMode: "single",
+    savedEnableAttachment: true,
+    savedSheetAttachRule: true
   });
   sheetUrlEl.value = "";
   sendLimitEl.value = "";
   modeEl.value = "single";
+  enableAttachmentEl.checked = true;
+  sheetAttachRuleEl.checked = true;
   toggleMode();
+  toggleAttachmentUi();
   setStatus("Saved settings cleared.");
 });
 
@@ -390,9 +407,18 @@ runBtn.addEventListener("click", async () => {
 });
 
 (async function init() {
-  const data = await getStorage(["savedSheetUrl", "savedSendLimit", "savedMode"]);
+  const data = await getStorage([
+    "savedSheetUrl",
+    "savedSendLimit",
+    "savedMode",
+    "savedEnableAttachment",
+    "savedSheetAttachRule"
+  ]);
   if (data.savedSheetUrl) sheetUrlEl.value = data.savedSheetUrl;
   if (data.savedSendLimit) sendLimitEl.value = data.savedSendLimit;
   if (data.savedMode) modeEl.value = data.savedMode;
+  if (typeof data.savedEnableAttachment === "boolean") enableAttachmentEl.checked = data.savedEnableAttachment;
+  if (typeof data.savedSheetAttachRule === "boolean") sheetAttachRuleEl.checked = data.savedSheetAttachRule;
   toggleMode();
+  toggleAttachmentUi();
 })();

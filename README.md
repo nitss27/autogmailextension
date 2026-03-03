@@ -9,24 +9,22 @@ A Manifest V3 extension that automates Gmail compose and sends emails **one-by-o
 - Batch sending, one recipient at a time, with a strict single-compose lock to prevent overlapping sends.
 - Input modes:
   - Single email form.
-  - Pasted CSV/TSV rows with headers: `to,subject,body[,sent]`.
+  - Pasted CSV/TSV rows with headers: `to,subject,body[,sent,attach]`.
   - Google Sheet URL (public CSV export, **no OAuth**).
-- Rich body formatting from input/sheet:
-  - `**bold**`
-  - `__underline__`
-  - `- bullet items`
-- Attachment upload as a real file per email.
-- Attachment is injected directly into Gmail's file input first, so OS file picker is avoided in normal flow.
-- Continue from unsent entries:
-  - skips rows with `sent=yes/true/sent/1/done`
-  - in sheet mode tracks sent rows in local extension storage (`sheetSentRowsByUrl`).
-- Sheet sent-status writeback:
-  - if your sheet has a `sent` column, extension attempts to write `YES` for successfully sent rows.
-  - if writeback fails, local sent tracking still prevents re-sending the same rows.
+- Rich body formatting support:
+  - raw HTML from sheet/body is preserved if provided,
+  - plus `**bold**`, `__underline__`, and `- bullet items` for plain text.
+- Attachment options:
+  - global toggle to send without attachment,
+  - in sheet mode, optional row-level attachment rule from `attach` column (`yes/true/1`).
+- Sheet status handling:
+  - only uses sheet `sent` column to determine unsent rows,
+  - after successful send, tries to write `YES` back to sheet `sent` column.
 - Persistent saved settings:
-  - last mode
-  - Google Sheet URL
-  - send limit per run
+  - last mode,
+  - Google Sheet URL,
+  - send limit per run,
+  - attachment toggles.
 
 ## How to use
 
@@ -35,12 +33,15 @@ A Manifest V3 extension that automates Gmail compose and sends emails **one-by-o
 3. Click **Load unpacked** and pick this folder.
 4. Open Gmail in a tab and sign in.
 5. Open extension popup and choose input mode.
-6. Add/select attachment.
+6. Set attachment toggle/rule as needed, and choose file only if required.
 7. Click **Send One-by-One**.
 
 ## Google Sheet mode (no OAuth)
 
-- Put columns in first row: `to,subject,body` and add `sent` column if you want sheet writeback.
+- Required columns: `to,subject,body,sent`
+- Optional attachment rule column: `attach`
+  - `yes/true/1` => attachment sent for that row (when global attachment toggle is ON)
+  - blank/other => send without attachment for that row
 - Ensure the sheet is accessible as CSV export (public/published as needed).
 - Paste the Google Sheet URL in popup once; it is saved.
 
@@ -48,7 +49,7 @@ A Manifest V3 extension that automates Gmail compose and sends emails **one-by-o
 
 - Ensure the sheet is shared/published so CSV export is accessible.
 - Keep a `gid` in the URL when targeting a specific tab.
-- The extension now tries multiple CSV endpoints (`/export?format=csv` and `gviz/tq?tqx=out:csv`) automatically.
+- The extension tries multiple CSV endpoints (`/export?format=csv` and `gviz/tq?tqx=out:csv`) automatically.
 
 ## Notes
 
