@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Gmail Auto Sender",
+  "version": "1.0.0",
+  "description": "Send Gmail messages one-by-one from form, pasted rows, or a Google Sheet CSV without OAuth.",
+  "permissions": ["activeTab", "scripting", "storage", "tabs"],
+  "host_permissions": ["https://mail.google.com/*", "https://docs.google.com/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Gmail Auto Sender",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://mail.google.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
