@@ -1,18 +1,21 @@
-# Domain Email Harvester (Chrome Extension)
+# Bulk Email Extractor (Chrome Extension)
 
-This extension processes many websites and outputs a per-domain email table.
+Manifest V3 extension for sequential, active-tab email extraction.
 
-## What it does
+## Workflow
 
-For each website you provide:
+For each URL (one-by-one):
 
-1. Opens all sites in a batch first (e.g. 5 tabs), auto-switches to each tab to let DOM settle, extracts emails, then closes them.
-2. Extracts emails from rendered DOM/page content.
-3. Extracts home-page source emails from raw page source (view-source equivalent).
-4. Finds contact links (`href` includes `contact`).
-5. Fetches each contact page source and extracts emails (same data as view-source, faster and more reliable).
-6. Exports **Rendered Emails**, **Source Emails**, and **All Emails** (merged/deduped).
-7. Runs fully automatic until all batches are complete.
+1. Open a new tab with `active: true`.
+2. Wait for `tabs.onUpdated` status `complete`.
+3. Extract emails from `document.documentElement.innerHTML` + `mailto:` links.
+4. Discover `contact` / `about` links.
+5. Navigate the **same tab** to those secondary pages and extract more emails.
+6. Also fetch raw page source for main + secondary pages for source-level emails.
+7. Deduplicate emails per domain.
+8. Close the tab and move to the next URL.
+
+The popup shows live progress (`Processing X of Y...`) and exports a copyable TSV table (`Domain | Emails | Error`).
 
 ## Load extension
 
@@ -25,6 +28,5 @@ For each website you provide:
 
 1. Click extension icon.
 2. Paste one URL/domain per line.
-3. Set **Max websites opened at a time** (default: 5).
-4. Click **Process Websites**.
-5. The final TSV table is copied to clipboard automatically.
+3. Click **Start**.
+4. Wait for completion, then click **Copy Table** (or use auto-copied output).

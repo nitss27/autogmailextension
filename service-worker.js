@@ -1,7 +1,7 @@
 const EMAIL_REGEX = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
-const TAB_LOAD_TIMEOUT_MS = 20000;
-const TAB_ACTIVATION_SETTLE_MS = 250;
-const CONTACT_SOURCE_CONCURRENCY = 4;
+const TAB_LOAD_TIMEOUT_MS = 25000;
+const TAB_SETTLE_MS = 500;
+const MAX_SECONDARY_PAGES = 3;
 
 function normalizeUrl(input) {
   const raw = input.trim();
@@ -26,49 +26,12 @@ function extractEmailsFromText(text) {
   return unique((text.match(EMAIL_REGEX) || []).map((email) => email.toLowerCase()));
 }
 
-function extractContactLinksFromHtml(html, baseUrl) {
-  const hrefRegex = /<a\b[^>]*href\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/gi;
-  const links = [];
-  let match;
-
-  while ((match = hrefRegex.exec(html)) !== null) {
-    const hrefRaw = match[1] || match[2] || match[3] || '';
-    if (!hrefRaw) continue;
-
-    try {
-      const absolute = new URL(hrefRaw, baseUrl).toString();
-      if (absolute.toLowerCase().includes('contact')) links.push(absolute);
-    } catch {
-      // ignore invalid hrefs
-    }
-  }
-
-  return unique(links);
-}
-
-async function fetchPage(url) {
-  const response = await fetch(url, {
-    method: 'GET',
-    redirect: 'follow',
-    credentials: 'omit'
-  });
-
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  return response.text();
-}
-
-async function fetchSourceEmails(url) {
-  // Raw HTTP response body is equivalent to page source and is more reliable/faster
-  // than automating a `view-source:` browser page.
-  const html = await fetchPage(url);
-  return {
-    sourceHtml: html,
-    sourceEmails: extractEmailsFromText(html)
-  };
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function createTab(url) {
-  return chrome.tabs.create({ url, active: false });
+  return chrome.tabs.create({ url, active: true });
 }
 
 async function closeTab(tabId) {
@@ -76,20 +39,8 @@ async function closeTab(tabId) {
   try {
     await chrome.tabs.remove(tabId);
   } catch {
-    // ignore close failures
+    // ignore
   }
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function activateTab(tabId) {
-  if (!tabId) return;
-  const tab = await chrome.tabs.get(tabId);
-  await chrome.windows.update(tab.windowId, { focused: true });
-  await chrome.tabs.update(tabId, { active: true });
-  await sleep(TAB_ACTIVATION_SETTLE_MS);
 }
 
 function waitForTabComplete(tabId, timeoutMs = TAB_LOAD_TIMEOUT_MS) {
@@ -114,173 +65,152 @@ function waitForTabComplete(tabId, timeoutMs = TAB_LOAD_TIMEOUT_MS) {
 
     chrome.tabs.onUpdated.addListener(onUpdated);
 
-    chrome.tabs
-      .get(tabId)
+    chrome.tabs.get(tabId)
       .then((tab) => {
         if (tab.status === 'complete') finish(resolve);
       })
-      .catch(() => finish(() => reject(new Error('Tab not available'))));
+      .catch(() => finish(() => reject(new Error('Tab unavailable'))));
   });
 }
 
-async function inspectRegularPage(tabId) {
+async function activateAndWait(tabId) {
+  const tab = await chrome.tabs.get(tabId);
+  await chrome.windows.update(tab.windowId, { focused: true });
+  await chrome.tabs.update(tabId, { active: true });
+  await waitForTabComplete(tabId);
+  await sleep(TAB_SETTLE_MS);
+}
+
+async function inspectTab(tabId) {
   const [injection] = await chrome.scripting.executeScript({
     target: { tabId },
     func: () => {
       const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
-      const html = document.documentElement?.outerHTML || '';
-      const text = document.body?.innerText || '';
-      const mailtoEmails = [...document.querySelectorAll('a[href^="mailto:"]')]
-        .map((a) => a.getAttribute('href') || '')
-        .map((href) => href.replace(/^mailto:/i, '').split('?')[0].trim())
-        .filter(Boolean);
-
-      const emails = [...new Set([
+      const html = document.documentElement?.innerHTML || '';
+      const emails = [
         ...(html.match(emailRegex) || []),
-        ...(text.match(emailRegex) || []),
-        ...mailtoEmails
-      ].map((email) => email.toLowerCase()))];
+        ...[...document.querySelectorAll('a[href^="mailto:"]')]
+          .map((a) => (a.getAttribute('href') || '').replace(/^mailto:/i, '').split('?')[0])
+      ];
 
-      const contactLinks = [...new Set(
-        [...document.querySelectorAll('a[href]')]
-          .map((anchor) => anchor.href)
-          .filter((href) => href && href.toLowerCase().includes('contact'))
-      )];
+      const secondaryLinks = [...document.querySelectorAll('a[href]')]
+        .map((a) => a.href)
+        .filter((href) => href && /(contact|about)/i.test(href));
 
-      return { pageUrl: location.href, html, emails, contactLinks };
+      return {
+        pageUrl: location.href,
+        html,
+        emails: [...new Set(emails.map((email) => email.trim().toLowerCase()).filter(Boolean))],
+        secondaryLinks: [...new Set(secondaryLinks)]
+      };
     }
   });
 
-  return injection?.result || { pageUrl: '', html: '', emails: [], contactLinks: [] };
+  return injection?.result || { pageUrl: '', html: '', emails: [], secondaryLinks: [] };
 }
 
-async function mapWithConcurrency(items, limit, mapper) {
-  const results = new Array(items.length);
-  let index = 0;
-
-  async function worker() {
-    while (index < items.length) {
-      const currentIndex = index;
-      index += 1;
-      results[currentIndex] = await mapper(items[currentIndex], currentIndex);
-    }
-  }
-
-  const workers = Array.from({ length: Math.min(limit, items.length) }, () => worker());
-  await Promise.all(workers);
-  return results;
+async function fetchSourceEmails(url) {
+  const response = await fetch(url, { method: 'GET', redirect: 'follow', credentials: 'omit' });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const html = await response.text();
+  return extractEmailsFromText(html);
 }
 
-async function buildResultFromInspected(url, inspected) {
-  const homeSource = await fetchSourceEmails(url).catch(() => ({ sourceHtml: inspected.html, sourceEmails: extractEmailsFromText(inspected.html) }));
+async function processOneUrl(url, progress) {
+  let tab = null;
 
-  const renderedEmails = unique([...inspected.emails, ...extractEmailsFromText(inspected.html)]);
+  try {
+    tab = await createTab(url);
+    await activateAndWait(tab.id);
 
-  const contactLinks = unique([
-    ...inspected.contactLinks,
-    ...extractContactLinksFromHtml(inspected.html, inspected.pageUrl || url),
-    ...extractContactLinksFromHtml(homeSource.sourceHtml, url)
-  ]);
+    const firstPass = await inspectTab(tab.id);
+    const secondaryQueue = unique(firstPass.secondaryLinks).slice(0, MAX_SECONDARY_PAGES);
+    const secondaryEmails = [];
 
-  const contactEmailGroups = await mapWithConcurrency(contactLinks, CONTACT_SOURCE_CONCURRENCY, async (contactUrl) => {
-    const contactSource = await fetchSourceEmails(contactUrl).catch(() => ({ sourceHtml: '', sourceEmails: [] }));
-    return unique([...contactSource.sourceEmails, ...extractEmailsFromText(contactSource.sourceHtml)]);
-  });
-
-  const sourceEmails = unique([
-    ...homeSource.sourceEmails,
-    ...contactEmailGroups.flat()
-  ]);
-
-  const emails = unique([...renderedEmails, ...sourceEmails]);
-
-  return {
-    url,
-    domain: new URL(url).hostname,
-    renderedEmails,
-    sourceEmails,
-    emails,
-    contactLinks,
-    totalEmails: emails.length
-  };
-}
-
-async function processBatch(batchUrls) {
-  const tabStates = await Promise.all(
-    batchUrls.map(async (url) => {
-      try {
-        const tab = await createTab(url);
-        return { url, tabId: tab.id };
-      } catch (error) {
-        return { url, createError: error instanceof Error ? error.message : 'Tab create failed' };
-      }
-    })
-  );
-
-  const inspectionResults = [];
-
-  for (const state of tabStates) {
-    if (state.createError || !state.tabId) {
-      inspectionResults.push({
-        url: state.url,
-        error: state.createError || 'Tab not created',
-        inspected: { pageUrl: state.url, html: '', emails: [], contactLinks: [] },
-        tabId: null
-      });
-      continue;
+    for (const link of secondaryQueue) {
+      await chrome.tabs.update(tab.id, { url: link, active: true });
+      await activateAndWait(tab.id);
+      const secondaryPass = await inspectTab(tab.id);
+      secondaryEmails.push(...secondaryPass.emails, ...extractEmailsFromText(secondaryPass.html));
     }
 
-    try {
-      await waitForTabComplete(state.tabId);
-      await activateTab(state.tabId);
-      const inspected = await inspectRegularPage(state.tabId);
-      inspectionResults.push({ url: state.url, inspected, tabId: state.tabId });
-    } catch (error) {
-      inspectionResults.push({
-        url: state.url,
-        error: error instanceof Error ? error.message : 'Inspection failed',
-        inspected: { pageUrl: state.url, html: '', emails: [], contactLinks: [] },
-        tabId: state.tabId
+    const sourceEmailsMain = await fetchSourceEmails(url).catch(() => []);
+    const sourceEmailsSecondary = [];
+
+    for (const link of secondaryQueue) {
+      const emails = await fetchSourceEmails(link).catch(() => []);
+      sourceEmailsSecondary.push(...emails);
+    }
+
+    const emails = unique([
+      ...firstPass.emails,
+      ...extractEmailsFromText(firstPass.html),
+      ...secondaryEmails,
+      ...sourceEmailsMain,
+      ...sourceEmailsSecondary
+    ]);
+
+    return {
+      url,
+      domain: new URL(url).hostname,
+      emails,
+      totalEmails: emails.length
+    };
+  } catch (error) {
+    return {
+      url,
+      domain: (() => {
+        try {
+          return new URL(url).hostname;
+        } catch {
+          return url;
+        }
+      })(),
+      emails: [],
+      totalEmails: 0,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    };
+  } finally {
+    await closeTab(tab?.id);
+    if (progress?.requestId) {
+      chrome.runtime.sendMessage({
+        type: 'PROCESS_PROGRESS',
+        requestId: progress.requestId,
+        current: progress.current,
+        total: progress.total,
+        domain: progress.domain
+      }).catch(() => {
+        // popup may be closed
       });
     }
   }
-
-  await Promise.all(inspectionResults.map((item) => closeTab(item.tabId)));
-
-  return Promise.all(
-    inspectionResults.map(async ({ url, inspected, error }) => {
-      try {
-        const result = await buildResultFromInspected(url, inspected);
-        return error ? { ...result, error } : result;
-      } catch (processError) {
-        return {
-          url,
-          domain: (() => {
-            try {
-              return new URL(url).hostname;
-            } catch {
-              return url;
-            }
-          })(),
-          renderedEmails: [],
-          sourceEmails: [],
-          emails: [],
-          contactLinks: [],
-          totalEmails: 0,
-          error: processError instanceof Error ? processError.message : (error || 'Unknown error')
-        };
-      }
-    })
-  );
 }
 
-async function processInBatches(urls, batchSize) {
+async function processSequential(urls, requestId) {
   const results = [];
 
-  for (let i = 0; i < urls.length; i += batchSize) {
-    const batch = urls.slice(i, i + batchSize);
-    const batchResults = await processBatch(batch);
-    results.push(...batchResults);
+  for (let i = 0; i < urls.length; i += 1) {
+    const url = urls[i];
+    const domain = (() => {
+      try {
+        return new URL(url).hostname;
+      } catch {
+        return url;
+      }
+    })();
+
+    chrome.runtime.sendMessage({
+      type: 'PROCESS_PROGRESS',
+      requestId,
+      current: i + 1,
+      total: urls.length,
+      domain
+    }).catch(() => {
+      // popup may be closed
+    });
+
+    const result = await processOneUrl(url, { requestId, current: i + 1, total: urls.length, domain });
+    results.push(result);
   }
 
   return results;
@@ -290,10 +220,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type !== 'PROCESS_URLS') return false;
 
   const urls = unique((message.urls || []).map(normalizeUrl));
-  const batchSize = Math.max(1, Number(message.maxTabsAtTime) || 5);
+  const requestId = message.requestId || '';
 
   (async () => {
-    const results = await processInBatches(urls, batchSize);
+    const results = await processSequential(urls, requestId);
     sendResponse({ ok: true, results });
   })();
 
