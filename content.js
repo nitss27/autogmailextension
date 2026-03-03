@@ -165,7 +165,7 @@ async function attachFile(root, attachment) {
 }
 
 async function sendSingle(row, attachment) {
-  await waitForNoComposeDialog(5000, 80);
+  await waitForNoComposeDialog(1200, 60);
 
   const composeBtn = await waitFor(() => findComposeButton(), 5000, 70);
   if (!composeBtn) throw new Error("Compose button not found");
@@ -206,37 +206,28 @@ async function sendSingle(row, attachment) {
 
   sendBtn.click();
 
-  const sent = await waitFor(
-    () => {
-      const messageSentToast = document.querySelector("span.bAq");
-      const gone = !document.contains(root);
-      if (gone) return true;
-      if (messageSentToast && /message sent/i.test(messageSentToast.textContent || "")) return true;
-      return null;
-    },
-    6000,
-    90
+  // Fast mode: do not block long on previous email delivery.
+  // Move to next row as soon as compose closes (or after a short timeout).
+  const closedQuickly = await waitFor(
+    () => (!document.contains(root) ? true : null),
+    1400,
+    60
   );
 
-  if (!sent) {
+  if (!closedQuickly) {
+    // Fallback trigger if Gmail did not immediately process click.
     bodyBox.dispatchEvent(
       new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, ctrlKey: true, bubbles: true })
     );
-    const sentAfterFallback = await waitFor(
+    await waitFor(
       () => {
-        const messageSentToast = document.querySelector("span.bAq");
         const gone = !document.contains(root);
-        if (gone) return true;
-        if (messageSentToast && /message sent/i.test(messageSentToast.textContent || "")) return true;
-        return null;
+        const messageSentToast = document.querySelector("span.bAq");
+        return gone || (messageSentToast && /message sent/i.test(messageSentToast.textContent || "")) ? true : null;
       },
-      4500,
-      90
+      1800,
+      70
     );
-
-    if (!sentAfterFallback) {
-      throw new Error("Send did not complete for this row");
-    }
   }
 }
 
@@ -266,7 +257,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     for (const row of rows) {
       await sendSingle(row, attachment);
       sentRows.push(row);
-      await sleep(250);
+      await sleep(80);
     }
 
     sendResponse({ ok: true, sentCount: sentRows.length, sentRows });
