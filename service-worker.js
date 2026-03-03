@@ -1,5 +1,6 @@
 const EMAIL_REGEX = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
 const TAB_LOAD_TIMEOUT_MS = 25000;
+const TAB_ACTIVATION_SETTLE_MS = 700;
 
 function normalizeUrl(input) {
   const raw = input.trim();
@@ -66,6 +67,16 @@ async function closeTab(tabId) {
   } catch {
     // ignore close failures
   }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function activateTab(tabId) {
+  if (!tabId) return;
+  await chrome.tabs.update(tabId, { active: true });
+  await sleep(TAB_ACTIVATION_SETTLE_MS);
 }
 
 function waitForTabComplete(tabId, timeoutMs = TAB_LOAD_TIMEOUT_MS) {
@@ -206,31 +217,33 @@ async function processBatch(batchUrls) {
     })
   );
 
-  const inspectionResults = await Promise.all(
-    tabStates.map(async (state) => {
-      if (state.createError || !state.tabId) {
-        return {
-          url: state.url,
-          error: state.createError || 'Tab not created',
-          inspected: { pageUrl: state.url, html: '', emails: [], contactLinks: [] },
-          tabId: null
-        };
-      }
+  const inspectionResults = [];
 
-      try {
-        await waitForTabComplete(state.tabId);
-        const inspected = await inspectRegularPage(state.tabId);
-        return { url: state.url, inspected, tabId: state.tabId };
-      } catch (error) {
-        return {
-          url: state.url,
-          error: error instanceof Error ? error.message : 'Inspection failed',
-          inspected: { pageUrl: state.url, html: '', emails: [], contactLinks: [] },
-          tabId: state.tabId
-        };
-      }
-    })
-  );
+  for (const state of tabStates) {
+    if (state.createError || !state.tabId) {
+      inspectionResults.push({
+        url: state.url,
+        error: state.createError || 'Tab not created',
+        inspected: { pageUrl: state.url, html: '', emails: [], contactLinks: [] },
+        tabId: null
+      });
+      continue;
+    }
+
+    try {
+      await waitForTabComplete(state.tabId);
+      await activateTab(state.tabId);
+      const inspected = await inspectRegularPage(state.tabId);
+      inspectionResults.push({ url: state.url, inspected, tabId: state.tabId });
+    } catch (error) {
+      inspectionResults.push({
+        url: state.url,
+        error: error instanceof Error ? error.message : 'Inspection failed',
+        inspected: { pageUrl: state.url, html: '', emails: [], contactLinks: [] },
+        tabId: state.tabId
+      });
+    }
+  }
 
   await Promise.all(inspectionResults.map((item) => closeTab(item.tabId)));
 
