@@ -13,6 +13,8 @@ const runBtn = document.getElementById("runBtn");
 const clearBtn = document.getElementById("clearBtn");
 const statusEl = document.getElementById("status");
 
+const SENT_VALUES = new Set(["yes", "true", "sent", "1", "done"]);
+
 function setStatus(msg) {
   statusEl.textContent = msg;
 }
@@ -24,12 +26,69 @@ function toggleMode() {
   sheetFields.classList.toggle("hidden", mode !== "sheet");
 }
 
-function parseRowsWithMeta(inputText) {
-  const lines = inputText.split(/\r?\n/).filter(Boolean);
-  if (!lines.length) return { rows: [], meta: null };
+function splitCsvLine(line) {
+  const result = [];
+  let current = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i += 1) {
+    const char = line[i];
+
+    if (char === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        current += '"';
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+
+    if (char === "," && !inQuotes) {
+      result.push(current);
+      current = "";
+      continue;
+    }
+
+    current += char;
+  }
+
+  result.push(current);
+  return result;
+}
+
+function parseDelimitedRows(inputText) {
+  const clean = inputText.replace(/^\uFEFF/, "").trim();
+  if (!clean) return { delimiter: ",", matrix: [] };
+
+  const lines = clean.split(/\r?\n/).filter((line) => line.trim().length > 0);
+  if (!lines.length) return { delimiter: ",", matrix: [] };
 
   const delimiter = lines[0].includes("\t") ? "\t" : ",";
-  const headers = lines[0].split(delimiter).map((h) => h.trim().toLowerCase());
+  const matrix = lines.map((line) =>
+    delimiter === "\t" ? line.split("\t") : splitCsvLine(line)
+  );
+
+  return { delimiter, matrix };
+}
+
+function columnLetterFromIndex(idx) {
+  if (idx < 0) return null;
+  let n = idx + 1;
+  let out = "";
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    out = String.fromCharCode(65 + rem) + out;
+    n = Math.floor((n - 1) / 26);
+  }
+  return out;
+}
+
+function parseRowsWithMeta(inputText) {
+  const { delimiter, matrix } = parseDelimitedRows(inputText);
+  if (!matrix.length) return { rows: [], meta: null };
+
+  const headers = matrix[0].map((h) => h.trim().toLowerCase());
   const idx = {
     to: headers.indexOf("to"),
     subject: headers.indexOf("subject"),
@@ -41,17 +100,16 @@ function parseRowsWithMeta(inputText) {
     throw new Error("Headers must include to, subject, body");
   }
 
-  const rows = lines
+  const rows = matrix
     .slice(1)
-    .map((line, i) => {
-      const cols = line.split(delimiter);
-      const sentVal = idx.sent >= 0 ? (cols[idx.sent] || "").trim().toLowerCase() : "";
+    .map((cols, i) => {
+      const sentVal = idx.sent >= 0 ? String(cols[idx.sent] || "").trim().toLowerCase() : "";
       return {
         rowNumber: i + 2,
-        to: (cols[idx.to] || "").trim(),
-        subject: (cols[idx.subject] || "").trim(),
-        body: (cols[idx.body] || "").trim(),
-        sent: ["yes", "true", "sent", "1", "done"].includes(sentVal)
+        to: String(cols[idx.to] || "").trim(),
+        subject: String(cols[idx.subject] || "").trim(),
+        body: String(cols[idx.body] || "").trim(),
+        sent: SENT_VALUES.has(sentVal)
       };
     })
     .filter((r) => r.to && r.subject && r.body);
@@ -61,7 +119,7 @@ function parseRowsWithMeta(inputText) {
     meta: {
       delimiter,
       sentColumnIndex: idx.sent,
-      sentColumnLetter: idx.sent >= 0 ? String.fromCharCode(65 + idx.sent) : null
+      sentColumnLetter: columnLetterFromIndex(idx.sent)
     }
   };
 }
@@ -260,10 +318,15 @@ async function run() {
     pending = pending.slice(0, sendLimit);
   }
 
-  if (!pending.length) throw new Error("Nothing to send (all rows already marked sent)");
+  const skippedCount = rows.length - pending.length;
+  if (!pending.length) {
+    throw new Error(
+      `Nothing to send (total rows: ${rows.length}, skipped already-sent: ${skippedCount}). Check sent column values.`
+    );
+  }
 
   const tab = await getActiveGmailTab();
-  setStatus(`Sending ${pending.length} email(s)...`);
+  setStatus(`Parsed ${rows.length} row(s). Sending ${pending.length} email(s)...`);
 
   const response = await chrome.tabs.sendMessage(tab.id, {
     type: "RUN_BATCH_SEND",
@@ -291,9 +354,7 @@ async function run() {
 
     const writeback = await writeYesToSheetSentColumn(sourceInfo, response.sentRows || []);
     const base = `Done. Sent ${response.sentCount} email(s).`;
-    const wb = writeback.updated
-      ? ` Sheet writeback YES updated: ${writeback.updated}.`
-      : "";
+    const wb = writeback.updated ? ` Sheet writeback YES updated: ${writeback.updated}.` : "";
     const warn = writeback.warning ? ` Warning: ${writeback.warning}` : "";
     setStatus(`${base}${wb}${warn}`);
     return;
