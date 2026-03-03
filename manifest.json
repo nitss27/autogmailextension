@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "Domain Email Harvester",
+  "description": "Extracts emails from websites, their source, and contact pages, then copies a domain/email table.",
+  "version": "1.0.0",
+  "permissions": ["storage", "clipboardWrite"],
+  "host_permissions": ["<all_urls>"],
+  "action": {
+    "default_title": "Domain Email Harvester",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  }
+}
