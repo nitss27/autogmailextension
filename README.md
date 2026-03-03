@@ -11,11 +11,11 @@ For each URL (one-by-one):
 3. Extract emails from `document.documentElement.innerHTML` + `mailto:` links.
 4. Discover `contact` / `about` links.
 5. Navigate the **same tab** to those secondary pages and extract more emails.
-6. Also fetch raw page source for main + secondary pages for source-level emails.
+6. Also fetch raw page source for main + secondary pages for source-level emails (secondary source fetches run in parallel for speed).
 7. Deduplicate emails per domain.
 8. Close the tab and move to the next URL.
 
-The popup shows live progress (`Processing X of Y...`) and exports a copyable TSV table (`Domain | Emails | Error`).
+The popup shows live progress (`Processing X of Y...`) and stores run state/results in extension storage, so reopening the popup still shows output for copying. It exports a copyable TSV table (`Domain | Emails | Error`).
 
 ## Load extension
 

@@ -53,6 +53,29 @@ async function copyResults(results) {
   await navigator.clipboard.writeText(toClipboardTable(results));
 }
 
+async function loadLatestState() {
+  const response = await chrome.runtime.sendMessage({ type: 'GET_LATEST_RESULTS' });
+  if (!response?.ok || !response.state) return;
+
+  const { state } = response;
+  if (state.status === 'running') {
+    activeRequestId = state.requestId || activeRequestId;
+    setStatus(`Processing ${state.current} of ${state.total}: ${state.domain || '...'}`);
+    processBtn.disabled = true;
+  }
+
+  if (Array.isArray(state.results) && state.results.length) {
+    latestResults = state.results;
+    renderResults(latestResults);
+    copyBtn.disabled = false;
+
+    if (state.status === 'done') {
+      setStatus(`Done. Processed ${state.total} website(s). You can copy the table now.`, 'success');
+      processBtn.disabled = false;
+    }
+  }
+}
+
 chrome.runtime.onMessage.addListener((message) => {
   if (message?.type !== 'PROCESS_PROGRESS') return;
   if (!activeRequestId || message.requestId !== activeRequestId) return;
@@ -114,4 +137,8 @@ copyBtn.addEventListener('click', async () => {
   } catch (error) {
     setStatus(`Copy failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
   }
+});
+
+loadLatestState().catch(() => {
+  // ignore bootstrap state errors
 });

@@ -1,7 +1,8 @@
 const EMAIL_REGEX = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
-const TAB_LOAD_TIMEOUT_MS = 25000;
-const TAB_SETTLE_MS = 500;
+const TAB_LOAD_TIMEOUT_MS = 15000;
+const TAB_SETTLE_MS = 150;
 const MAX_SECONDARY_PAGES = 3;
+const RUN_STATE_KEY = 'latestRunState';
 
 function normalizeUrl(input) {
   const raw = input.trim();
@@ -43,6 +44,15 @@ async function closeTab(tabId) {
   }
 }
 
+async function setRunState(state) {
+  await chrome.storage.local.set({ [RUN_STATE_KEY]: state });
+}
+
+async function getRunState() {
+  const data = await chrome.storage.local.get(RUN_STATE_KEY);
+  return data[RUN_STATE_KEY] || null;
+}
+
 function waitForTabComplete(tabId, timeoutMs = TAB_LOAD_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
     let done = false;
@@ -65,7 +75,8 @@ function waitForTabComplete(tabId, timeoutMs = TAB_LOAD_TIMEOUT_MS) {
 
     chrome.tabs.onUpdated.addListener(onUpdated);
 
-    chrome.tabs.get(tabId)
+    chrome.tabs
+      .get(tabId)
       .then((tab) => {
         if (tab.status === 'complete') finish(resolve);
       })
@@ -116,7 +127,7 @@ async function fetchSourceEmails(url) {
   return extractEmailsFromText(html);
 }
 
-async function processOneUrl(url, progress) {
+async function processOneUrl(url) {
   let tab = null;
 
   try {
@@ -131,20 +142,19 @@ async function processOneUrl(url, progress) {
       await chrome.tabs.update(tab.id, { url: link, active: true });
       await activateAndWait(tab.id);
       const secondaryPass = await inspectTab(tab.id);
-      secondaryEmails.push(...secondaryPass.emails, ...extractEmailsFromText(secondaryPass.html));
+      secondaryEmails.push(...secondaryPass.emails);
     }
 
-    const sourceEmailsMain = await fetchSourceEmails(url).catch(() => []);
-    const sourceEmailsSecondary = [];
+    const sourceEmailsMainPromise = fetchSourceEmails(url).catch(() => []);
+    const sourceEmailsSecondaryPromise = Promise.all(
+      secondaryQueue.map((link) => fetchSourceEmails(link).catch(() => []))
+    );
 
-    for (const link of secondaryQueue) {
-      const emails = await fetchSourceEmails(link).catch(() => []);
-      sourceEmailsSecondary.push(...emails);
-    }
+    const sourceEmailsMain = await sourceEmailsMainPromise;
+    const sourceEmailsSecondary = (await sourceEmailsSecondaryPromise).flat();
 
     const emails = unique([
       ...firstPass.emails,
-      ...extractEmailsFromText(firstPass.html),
       ...secondaryEmails,
       ...sourceEmailsMain,
       ...sourceEmailsSecondary
@@ -172,22 +182,13 @@ async function processOneUrl(url, progress) {
     };
   } finally {
     await closeTab(tab?.id);
-    if (progress?.requestId) {
-      chrome.runtime.sendMessage({
-        type: 'PROCESS_PROGRESS',
-        requestId: progress.requestId,
-        current: progress.current,
-        total: progress.total,
-        domain: progress.domain
-      }).catch(() => {
-        // popup may be closed
-      });
-    }
   }
 }
 
-async function processSequential(urls, requestId) {
+async function runProcessing(urls, requestId) {
   const results = [];
+
+  await setRunState({ status: 'running', requestId, total: urls.length, current: 0, domain: '', results: [] });
 
   for (let i = 0; i < urls.length; i += 1) {
     const url = urls[i];
@@ -199,6 +200,8 @@ async function processSequential(urls, requestId) {
       }
     })();
 
+    await setRunState({ status: 'running', requestId, total: urls.length, current: i + 1, domain, results });
+
     chrome.runtime.sendMessage({
       type: 'PROCESS_PROGRESS',
       requestId,
@@ -209,21 +212,30 @@ async function processSequential(urls, requestId) {
       // popup may be closed
     });
 
-    const result = await processOneUrl(url, { requestId, current: i + 1, total: urls.length, domain });
+    const result = await processOneUrl(url);
     results.push(result);
   }
 
+  await setRunState({ status: 'done', requestId, total: urls.length, current: urls.length, domain: '', results });
   return results;
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type === 'GET_LATEST_RESULTS') {
+    (async () => {
+      const state = await getRunState();
+      sendResponse({ ok: true, state });
+    })();
+    return true;
+  }
+
   if (message?.type !== 'PROCESS_URLS') return false;
 
   const urls = unique((message.urls || []).map(normalizeUrl));
   const requestId = message.requestId || '';
 
   (async () => {
-    const results = await processSequential(urls, requestId);
+    const results = await runProcessing(urls, requestId);
     sendResponse({ ok: true, results });
   })();
 
