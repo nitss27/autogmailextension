@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Domain Email Harvester</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Domain Email Harvester</h1>
+      <p>Enter one URL/domain per line. The extension scans main + contact pages and source HTML for emails.</p>
+
+      <textarea id="websiteInput" placeholder="example.com&#10;https://openai.com"></textarea>
+
+      <div class="actions">
+        <button id="processBtn">Process Websites</button>
+        <button id="copyBtn" disabled>Copy Table</button>
+      </div>
+
+      <div id="status" class="status"></div>
+      <div id="results"></div>
+    </main>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
