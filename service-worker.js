@@ -35,9 +35,7 @@ function extractContactLinksFromHtml(html, baseUrl) {
 
     try {
       const absolute = new URL(hrefRaw, baseUrl).toString();
-      if (absolute.toLowerCase().includes('contact')) {
-        links.push(absolute);
-      }
+      if (absolute.toLowerCase().includes('contact')) links.push(absolute);
     } catch {
       // ignore invalid hrefs
     }
@@ -53,10 +51,7 @@ async function fetchPage(url) {
     credentials: 'omit'
   });
 
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`);
-  }
-
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return response.text();
 }
 
@@ -64,23 +59,33 @@ function createTab(url) {
   return chrome.tabs.create({ url, active: false });
 }
 
+async function closeTab(tabId) {
+  if (!tabId) return;
+  try {
+    await chrome.tabs.remove(tabId);
+  } catch {
+    // ignore close failures
+  }
+}
+
 function waitForTabComplete(tabId, timeoutMs = TAB_LOAD_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
     let done = false;
 
-    const timeout = setTimeout(() => {
+    const finish = (callback) => {
       if (done) return;
-      done = true;
-      chrome.tabs.onUpdated.removeListener(onUpdated);
-      reject(new Error('Tab load timeout'));
-    }, timeoutMs);
-
-    const onUpdated = (updatedTabId, changeInfo) => {
-      if (updatedTabId !== tabId || changeInfo.status !== 'complete' || done) return;
       done = true;
       clearTimeout(timeout);
       chrome.tabs.onUpdated.removeListener(onUpdated);
-      resolve();
+      callback();
+    };
+
+    const timeout = setTimeout(() => finish(() => reject(new Error('Tab load timeout'))), timeoutMs);
+
+    const onUpdated = (updatedTabId, changeInfo) => {
+      if (updatedTabId === tabId && changeInfo.status === 'complete') {
+        finish(resolve);
+      }
     };
 
     chrome.tabs.onUpdated.addListener(onUpdated);
@@ -88,20 +93,9 @@ function waitForTabComplete(tabId, timeoutMs = TAB_LOAD_TIMEOUT_MS) {
     chrome.tabs
       .get(tabId)
       .then((tab) => {
-        if (tab.status === 'complete' && !done) {
-          done = true;
-          clearTimeout(timeout);
-          chrome.tabs.onUpdated.removeListener(onUpdated);
-          resolve();
-        }
+        if (tab.status === 'complete') finish(resolve);
       })
-      .catch(() => {
-        if (done) return;
-        done = true;
-        clearTimeout(timeout);
-        chrome.tabs.onUpdated.removeListener(onUpdated);
-        reject(new Error('Tab not available'));
-      });
+      .catch(() => finish(() => reject(new Error('Tab not available'))));
   });
 }
 
@@ -112,19 +106,24 @@ async function inspectRegularPage(tabId) {
       const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
       const html = document.documentElement?.outerHTML || '';
       const text = document.body?.innerText || '';
-      const emails = [...new Set([...(html.match(emailRegex) || []), ...(text.match(emailRegex) || [])].map((email) => email.toLowerCase()))];
+      const mailtoEmails = [...document.querySelectorAll('a[href^="mailto:"]')]
+        .map((a) => a.getAttribute('href') || '')
+        .map((href) => href.replace(/^mailto:/i, '').split('?')[0].trim())
+        .filter(Boolean);
+
+      const emails = [...new Set([
+        ...(html.match(emailRegex) || []),
+        ...(text.match(emailRegex) || []),
+        ...mailtoEmails
+      ].map((email) => email.toLowerCase()))];
+
       const contactLinks = [...new Set(
         [...document.querySelectorAll('a[href]')]
           .map((anchor) => anchor.href)
           .filter((href) => href && href.toLowerCase().includes('contact'))
       )];
 
-      return {
-        pageUrl: location.href,
-        html,
-        emails,
-        contactLinks
-      };
+      return { pageUrl: location.href, html, emails, contactLinks };
     }
   });
 
@@ -148,102 +147,118 @@ async function extractEmailsFromViewSource(url) {
   } catch {
     return [];
   } finally {
-    if (tab?.id) {
-      try {
-        await chrome.tabs.remove(tab.id);
-      } catch {
-        // ignore
-      }
-    }
+    await closeTab(tab?.id);
   }
 }
 
-async function processSingleWebsiteWithTab(url) {
-  let tab = null;
+async function buildResultFromInspected(url, inspected) {
+  const fetchedHomeHtml = await fetchPage(url).catch(() => inspected.html);
 
-  try {
-    tab = await createTab(url);
-    await waitForTabComplete(tab.id);
+  const renderedEmails = unique([...inspected.emails, ...extractEmailsFromText(inspected.html)]);
 
-    const inspected = await inspectRegularPage(tab.id);
+  const contactLinks = unique([
+    ...inspected.contactLinks,
+    ...extractContactLinksFromHtml(inspected.html, inspected.pageUrl || url),
+    ...extractContactLinksFromHtml(fetchedHomeHtml, url)
+  ]);
 
-    let fetchedHtml = '';
-    try {
-      fetchedHtml = await fetchPage(url);
-    } catch {
-      fetchedHtml = inspected.html;
-    }
-
-    const renderedEmails = unique([
-      ...inspected.emails,
-      ...extractEmailsFromText(inspected.html)
-    ]);
-
-    const homeSourceEmails = unique([
-      ...extractEmailsFromText(fetchedHtml),
-      ...(await extractEmailsFromViewSource(url))
-    ]);
-
-    const contactLinks = unique([
-      ...inspected.contactLinks,
-      ...extractContactLinksFromHtml(inspected.html, inspected.pageUrl || url),
-      ...extractContactLinksFromHtml(fetchedHtml, url)
-    ]);
-
-    const contactSourceEmailLists = await Promise.all(
+  const [homeSourceFromView, contactSourceNested] = await Promise.all([
+    extractEmailsFromViewSource(url),
+    Promise.all(
       contactLinks.map(async (contactUrl) => {
-        const fromFetch = await (async () => {
-          try {
-            const html = await fetchPage(contactUrl);
-            return extractEmailsFromText(html);
-          } catch {
-            return [];
-          }
-        })();
-
-        const fromViewSource = await extractEmailsFromViewSource(contactUrl);
+        const [fromFetch, fromViewSource] = await Promise.all([
+          fetchPage(contactUrl).then(extractEmailsFromText).catch(() => []),
+          extractEmailsFromViewSource(contactUrl)
+        ]);
         return unique([...fromFetch, ...fromViewSource]);
       })
-    );
+    )
+  ]);
 
-    const sourceEmails = unique([...homeSourceEmails, ...contactSourceEmailLists.flat()]);
-    const allEmails = unique([...renderedEmails, ...sourceEmails]);
+  const sourceEmails = unique([
+    ...extractEmailsFromText(fetchedHomeHtml),
+    ...homeSourceFromView,
+    ...contactSourceNested.flat()
+  ]);
 
-    return {
-      url,
-      domain: new URL(url).hostname,
-      renderedEmails,
-      sourceEmails,
-      emails: allEmails,
-      contactLinks,
-      totalEmails: allEmails.length
-    };
-  } catch (error) {
-    return {
-      url,
-      domain: (() => {
-        try {
-          return new URL(url).hostname;
-        } catch {
-          return url;
-        }
-      })(),
-      renderedEmails: [],
-      sourceEmails: [],
-      emails: [],
-      contactLinks: [],
-      totalEmails: 0,
-      error: error instanceof Error ? error.message : 'Unknown error'
-    };
-  } finally {
-    if (tab?.id) {
+  const emails = unique([...renderedEmails, ...sourceEmails]);
+
+  return {
+    url,
+    domain: new URL(url).hostname,
+    renderedEmails,
+    sourceEmails,
+    emails,
+    contactLinks,
+    totalEmails: emails.length
+  };
+}
+
+async function processBatch(batchUrls) {
+  const tabStates = await Promise.all(
+    batchUrls.map(async (url) => {
       try {
-        await chrome.tabs.remove(tab.id);
-      } catch {
-        // ignore
+        const tab = await createTab(url);
+        return { url, tabId: tab.id };
+      } catch (error) {
+        return { url, createError: error instanceof Error ? error.message : 'Tab create failed' };
       }
-    }
-  }
+    })
+  );
+
+  const inspectionResults = await Promise.all(
+    tabStates.map(async (state) => {
+      if (state.createError || !state.tabId) {
+        return {
+          url: state.url,
+          error: state.createError || 'Tab not created',
+          inspected: { pageUrl: state.url, html: '', emails: [], contactLinks: [] },
+          tabId: null
+        };
+      }
+
+      try {
+        await waitForTabComplete(state.tabId);
+        const inspected = await inspectRegularPage(state.tabId);
+        return { url: state.url, inspected, tabId: state.tabId };
+      } catch (error) {
+        return {
+          url: state.url,
+          error: error instanceof Error ? error.message : 'Inspection failed',
+          inspected: { pageUrl: state.url, html: '', emails: [], contactLinks: [] },
+          tabId: state.tabId
+        };
+      }
+    })
+  );
+
+  await Promise.all(inspectionResults.map((item) => closeTab(item.tabId)));
+
+  return Promise.all(
+    inspectionResults.map(async ({ url, inspected, error }) => {
+      try {
+        const result = await buildResultFromInspected(url, inspected);
+        return error ? { ...result, error } : result;
+      } catch (processError) {
+        return {
+          url,
+          domain: (() => {
+            try {
+              return new URL(url).hostname;
+            } catch {
+              return url;
+            }
+          })(),
+          renderedEmails: [],
+          sourceEmails: [],
+          emails: [],
+          contactLinks: [],
+          totalEmails: 0,
+          error: processError instanceof Error ? processError.message : (error || 'Unknown error')
+        };
+      }
+    })
+  );
 }
 
 async function processInBatches(urls, batchSize) {
@@ -251,7 +266,7 @@ async function processInBatches(urls, batchSize) {
 
   for (let i = 0; i < urls.length; i += batchSize) {
     const batch = urls.slice(i, i + batchSize);
-    const batchResults = await Promise.all(batch.map((url) => processSingleWebsiteWithTab(url)));
+    const batchResults = await processBatch(batch);
     results.push(...batchResults);
   }
 

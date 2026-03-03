@@ -6,13 +6,13 @@ This extension processes many websites and outputs a per-domain email table.
 
 For each website you provide:
 
-1. Opens the site in a tab (in batches, e.g. 5 at a time).
+1. Opens all sites in a batch first (e.g. 5 tabs), visits/extracts each tab automatically, then closes them.
 2. Extracts emails from rendered DOM/page content.
 3. Opens `view-source:` for the home page and extracts source emails.
 4. Finds contact links (`href` includes `contact`).
 5. Opens/fetches contact pages and also opens their `view-source:` pages.
 6. Exports **Rendered Emails**, **Source Emails**, and **All Emails** (merged/deduped).
-7. Closes processed tabs and moves to next batch automatically.
+7. Runs fully automatic until all batches are complete.
 
 ## Load extension
 
