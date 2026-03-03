@@ -125,11 +125,17 @@ function dataUrlToFile(dataUrl, fileName, mimeType) {
 }
 
 async function attachFile(root, attachment) {
-  const attachBtn = findAttachButton(root);
-  if (!attachBtn) throw new Error("Attachment button not found");
-  attachBtn.click();
+  let input = await waitFor(() => findFileInput(root), 1200, 70);
 
-  const input = await waitFor(() => findFileInput(root), 4500, 70);
+  // Prefer direct file-input injection so the OS file picker does not open.
+  // Gmail usually keeps Filedata input in the compose DOM even when hidden.
+  if (!input) {
+    const attachBtn = findAttachButton(root);
+    if (!attachBtn) throw new Error("Attachment button not found");
+    attachBtn.click();
+    input = await waitFor(() => findFileInput(root), 3500, 70);
+  }
+
   if (!input) throw new Error("File input not found");
 
   const file = dataUrlToFile(attachment.dataUrl, attachment.name, attachment.type);

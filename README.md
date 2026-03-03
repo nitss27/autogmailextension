@@ -16,6 +16,7 @@ A Manifest V3 extension that automates Gmail compose and sends emails **one-by-o
   - `__underline__`
   - `- bullet items`
 - Attachment upload as a real file per email.
+- Attachment is injected directly into Gmail's file input first, so OS file picker is avoided in normal flow.
 - Continue from unsent entries:
   - skips rows with `sent=yes/true/sent/1/done`
   - in sheet mode tracks sent rows in local extension storage (`sheetSentRowsByUrl`).
