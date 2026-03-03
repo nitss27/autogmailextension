@@ -75,6 +75,8 @@ function sleep(ms) {
 
 async function activateTab(tabId) {
   if (!tabId) return;
+  const tab = await chrome.tabs.get(tabId);
+  await chrome.windows.update(tab.windowId, { focused: true });
   await chrome.tabs.update(tabId, { active: true });
   await sleep(TAB_ACTIVATION_SETTLE_MS);
 }
@@ -173,18 +175,14 @@ async function buildResultFromInspected(url, inspected) {
     ...extractContactLinksFromHtml(fetchedHomeHtml, url)
   ]);
 
-  const [homeSourceFromView, contactSourceNested] = await Promise.all([
-    extractEmailsFromViewSource(url),
-    Promise.all(
-      contactLinks.map(async (contactUrl) => {
-        const [fromFetch, fromViewSource] = await Promise.all([
-          fetchPage(contactUrl).then(extractEmailsFromText).catch(() => []),
-          extractEmailsFromViewSource(contactUrl)
-        ]);
-        return unique([...fromFetch, ...fromViewSource]);
-      })
-    )
-  ]);
+  const homeSourceFromView = await extractEmailsFromViewSource(url);
+
+  const contactSourceNested = [];
+  for (const contactUrl of contactLinks) {
+    const fromFetch = await fetchPage(contactUrl).then(extractEmailsFromText).catch(() => []);
+    const fromViewSource = await extractEmailsFromViewSource(contactUrl);
+    contactSourceNested.push(unique([...fromFetch, ...fromViewSource]));
+  }
 
   const sourceEmails = unique([
     ...extractEmailsFromText(fetchedHomeHtml),

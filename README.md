@@ -10,7 +10,7 @@ For each website you provide:
 2. Extracts emails from rendered DOM/page content.
 3. Opens `view-source:` for the home page and extracts source emails.
 4. Finds contact links (`href` includes `contact`).
-5. Opens/fetches contact pages and also opens their `view-source:` pages.
+5. Opens/fetches contact pages and visits each `view-source:` page one-by-one to extract emails before moving on.
 6. Exports **Rendered Emails**, **Source Emails**, and **All Emails** (merged/deduped).
 7. Runs fully automatic until all batches are complete.
 
