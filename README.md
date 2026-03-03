@@ -6,7 +6,7 @@ A Manifest V3 extension that automates Gmail compose and sends emails **one-by-o
 
 - Manual Gmail flow automation: **Compose → To → Subject → Body → Attach → Send**.
 - Faster send loop while keeping the same sequence, using dynamic waits instead of long fixed delays.
-- Batch sending, one recipient at a time.
+- Batch sending, one recipient at a time, with a strict single-compose lock to prevent overlapping sends.
 - Input modes:
   - Single email form.
   - Pasted CSV/TSV rows with headers: `to,subject,body[,sent]`.

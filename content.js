@@ -1,5 +1,7 @@
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+let batchInProgress = false;
+
 async function waitFor(getter, timeoutMs = 5000, pollMs = 80) {
   const start = Date.now();
   let value = getter();
@@ -8,6 +10,19 @@ async function waitFor(getter, timeoutMs = 5000, pollMs = 80) {
     value = getter();
   }
   return value;
+}
+
+function getComposeDialogs() {
+  return Array.from(document.querySelectorAll("div[role='dialog']")).filter((el) => document.contains(el));
+}
+
+async function waitForNoComposeDialog(timeoutMs = 5000, pollMs = 80) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (getComposeDialogs().length === 0) return true;
+    await sleep(pollMs);
+  }
+  return getComposeDialogs().length === 0;
 }
 
 function dispatchInput(node, value) {
@@ -26,7 +41,7 @@ function findComposeButton() {
 }
 
 function findActiveComposeRoot() {
-  const dialogs = Array.from(document.querySelectorAll("div[role='dialog']"));
+  const dialogs = getComposeDialogs();
   return dialogs[dialogs.length - 1] || null;
 }
 
@@ -131,6 +146,8 @@ async function attachFile(root, attachment) {
 }
 
 async function sendSingle(row, attachment) {
+  await waitForNoComposeDialog(5000, 80);
+
   const composeBtn = await waitFor(() => findComposeButton(), 5000, 70);
   if (!composeBtn) throw new Error("Compose button not found");
   composeBtn.click();
@@ -163,19 +180,28 @@ async function sendSingle(row, attachment) {
   if (!sendBtn) throw new Error("Send button not found");
   sendBtn.click();
 
-  await waitFor(
-    () => {
-      const messageSentToast = document.querySelector("span.bAq");
-      const gone = !document.contains(root);
-      return gone || (messageSentToast && /message sent/i.test(messageSentToast.textContent || ""));
-    },
-    3500,
-    90
-  );
+  const closed = await waitForNoComposeDialog(5000, 90);
+  if (!closed) {
+    await waitFor(
+      () => {
+        const messageSentToast = document.querySelector("span.bAq");
+        return messageSentToast && /message sent/i.test(messageSentToast.textContent || "");
+      },
+      2500,
+      90
+    );
+  }
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type !== "RUN_BATCH_SEND") return;
+
+  if (batchInProgress) {
+    sendResponse({ ok: false, error: "A batch is already running. Please wait for it to finish." });
+    return false;
+  }
+
+  batchInProgress = true;
 
   (async () => {
     const rows = message.payload?.rows || [];
@@ -193,9 +219,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     sendResponse({ ok: true, sentCount: sentRows.length, sentRows });
-  })().catch((err) => {
-    sendResponse({ ok: false, error: err.message || "Unknown error" });
-  });
+  })()
+    .catch((err) => {
+      sendResponse({ ok: false, error: err.message || "Unknown error" });
+    })
+    .finally(() => {
+      batchInProgress = false;
+    });
 
   return true;
 });
