@@ -20,13 +20,17 @@ function renderResults(results) {
 
   const rows = results
     .map((result) => {
-      const emails = result.emails.length ? result.emails.join('<br>') : '<span class="small">No emails found</span>';
+      const renderedEmails = result.renderedEmails?.length ? result.renderedEmails.join('<br>') : '<span class="small">None</span>';
+      const sourceEmails = result.sourceEmails?.length ? result.sourceEmails.join('<br>') : '<span class="small">None</span>';
+      const allEmails = result.emails?.length ? result.emails.join('<br>') : '<span class="small">No emails found</span>';
       const contacts = result.contactLinks.length;
       const errorLine = result.error ? `<div class="small">Error: ${result.error}</div>` : '';
 
       return `<tr>
         <td>${result.domain}${errorLine}</td>
-        <td>${emails}</td>
+        <td>${renderedEmails}</td>
+        <td>${sourceEmails}</td>
+        <td>${allEmails}</td>
         <td>${contacts}</td>
       </tr>`;
     })
@@ -36,7 +40,9 @@ function renderResults(results) {
     <thead>
       <tr>
         <th>Domain</th>
-        <th>Emails</th>
+        <th>Rendered Emails</th>
+        <th>Source Emails (home+contact view-source)</th>
+        <th>All Emails</th>
         <th>Contact URLs</th>
       </tr>
     </thead>
@@ -45,13 +51,16 @@ function renderResults(results) {
 }
 
 function toClipboardTable(results) {
-  const headers = ['Domain', 'Emails', 'Contact URLs Found', 'Error'];
+  const headers = ['Domain', 'Rendered Emails', 'Source Emails', 'All Emails', 'Contact URLs Found', 'Error'];
   const rows = results.map((result) => [
     result.domain,
-    result.emails.join(', '),
+    (result.renderedEmails || []).join(', '),
+    (result.sourceEmails || []).join(', '),
+    (result.emails || []).join(', '),
     String(result.contactLinks.length),
     result.error || ''
   ]);
+
   return [headers, ...rows].map((row) => row.join('\t')).join('\n');
 }
 
@@ -78,11 +87,7 @@ async function processWebsites() {
   copyBtn.disabled = true;
 
   try {
-    const response = await chrome.runtime.sendMessage({
-      type: 'PROCESS_URLS',
-      urls,
-      maxTabsAtTime
-    });
+    const response = await chrome.runtime.sendMessage({ type: 'PROCESS_URLS', urls, maxTabsAtTime });
 
     if (!response?.ok) {
       throw new Error('Unexpected extension response.');

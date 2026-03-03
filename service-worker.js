@@ -25,17 +25,23 @@ function extractEmailsFromText(text) {
 }
 
 function extractContactLinksFromHtml(html, baseUrl) {
-  const doc = new DOMParser().parseFromString(html, 'text/html');
-  const anchors = [...doc.querySelectorAll('a[href]')];
-  const links = anchors
-    .map((anchor) => {
-      try {
-        return new URL(anchor.getAttribute('href'), baseUrl).toString();
-      } catch {
-        return null;
+  const hrefRegex = /<a\b[^>]*href\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/gi;
+  const links = [];
+  let match;
+
+  while ((match = hrefRegex.exec(html)) !== null) {
+    const hrefRaw = match[1] || match[2] || match[3] || '';
+    if (!hrefRaw) continue;
+
+    try {
+      const absolute = new URL(hrefRaw, baseUrl).toString();
+      if (absolute.toLowerCase().includes('contact')) {
+        links.push(absolute);
       }
-    })
-    .filter((href) => href && href.toLowerCase().includes('contact'));
+    } catch {
+      // ignore invalid hrefs
+    }
+  }
 
   return unique(links);
 }
@@ -71,7 +77,6 @@ function waitForTabComplete(tabId, timeoutMs = TAB_LOAD_TIMEOUT_MS) {
 
     const onUpdated = (updatedTabId, changeInfo) => {
       if (updatedTabId !== tabId || changeInfo.status !== 'complete' || done) return;
-
       done = true;
       clearTimeout(timeout);
       chrome.tabs.onUpdated.removeListener(onUpdated);
@@ -80,40 +85,43 @@ function waitForTabComplete(tabId, timeoutMs = TAB_LOAD_TIMEOUT_MS) {
 
     chrome.tabs.onUpdated.addListener(onUpdated);
 
-    chrome.tabs.get(tabId).then((tab) => {
-      if (tab.status === 'complete' && !done) {
+    chrome.tabs
+      .get(tabId)
+      .then((tab) => {
+        if (tab.status === 'complete' && !done) {
+          done = true;
+          clearTimeout(timeout);
+          chrome.tabs.onUpdated.removeListener(onUpdated);
+          resolve();
+        }
+      })
+      .catch(() => {
+        if (done) return;
         done = true;
         clearTimeout(timeout);
         chrome.tabs.onUpdated.removeListener(onUpdated);
-        resolve();
-      }
-    }).catch(() => {
-      if (done) return;
-      done = true;
-      clearTimeout(timeout);
-      chrome.tabs.onUpdated.removeListener(onUpdated);
-      reject(new Error('Tab not available'));
-    });
+        reject(new Error('Tab not available'));
+      });
   });
 }
 
-async function inspectTabContent(tabId) {
+async function inspectRegularPage(tabId) {
   const [injection] = await chrome.scripting.executeScript({
     target: { tabId },
     func: () => {
       const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
-      const bodyHtml = document.documentElement?.outerHTML || document.body?.innerHTML || '';
-      const bodyText = document.body?.innerText || '';
-      const emails = [...new Set([...(bodyHtml.match(emailRegex) || []), ...(bodyText.match(emailRegex) || [])].map((e) => e.toLowerCase()))];
+      const html = document.documentElement?.outerHTML || '';
+      const text = document.body?.innerText || '';
+      const emails = [...new Set([...(html.match(emailRegex) || []), ...(text.match(emailRegex) || [])].map((email) => email.toLowerCase()))];
       const contactLinks = [...new Set(
         [...document.querySelectorAll('a[href]')]
-          .map((a) => a.href)
+          .map((anchor) => anchor.href)
           .filter((href) => href && href.toLowerCase().includes('contact'))
       )];
 
       return {
         pageUrl: location.href,
-        html: bodyHtml,
+        html,
         emails,
         contactLinks
       };
@@ -123,6 +131,33 @@ async function inspectTabContent(tabId) {
   return injection?.result || { pageUrl: '', html: '', emails: [], contactLinks: [] };
 }
 
+async function extractEmailsFromViewSource(url) {
+  const viewSourceUrl = `view-source:${url}`;
+  let tab = null;
+
+  try {
+    tab = await createTab(viewSourceUrl);
+    await waitForTabComplete(tab.id);
+
+    const [injection] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => document.body?.innerText || document.documentElement?.innerText || ''
+    });
+
+    return extractEmailsFromText(injection?.result || '');
+  } catch {
+    return [];
+  } finally {
+    if (tab?.id) {
+      try {
+        await chrome.tabs.remove(tab.id);
+      } catch {
+        // ignore
+      }
+    }
+  }
+}
+
 async function processSingleWebsiteWithTab(url) {
   let tab = null;
 
@@ -130,43 +165,55 @@ async function processSingleWebsiteWithTab(url) {
     tab = await createTab(url);
     await waitForTabComplete(tab.id);
 
-    const inspected = await inspectTabContent(tab.id);
+    const inspected = await inspectRegularPage(tab.id);
 
-    let sourceHtml = '';
+    let fetchedHtml = '';
     try {
-      sourceHtml = await fetchPage(url);
+      fetchedHtml = await fetchPage(url);
     } catch {
-      sourceHtml = inspected.html;
+      fetchedHtml = inspected.html;
     }
 
-    const mainEmails = unique([
+    const renderedEmails = unique([
       ...inspected.emails,
-      ...extractEmailsFromText(inspected.html),
-      ...extractEmailsFromText(sourceHtml)
+      ...extractEmailsFromText(inspected.html)
+    ]);
+
+    const homeSourceEmails = unique([
+      ...extractEmailsFromText(fetchedHtml),
+      ...(await extractEmailsFromViewSource(url))
     ]);
 
     const contactLinks = unique([
       ...inspected.contactLinks,
       ...extractContactLinksFromHtml(inspected.html, inspected.pageUrl || url),
-      ...extractContactLinksFromHtml(sourceHtml, url)
+      ...extractContactLinksFromHtml(fetchedHtml, url)
     ]);
 
-    const contactEmailLists = await Promise.all(
+    const contactSourceEmailLists = await Promise.all(
       contactLinks.map(async (contactUrl) => {
-        try {
-          const html = await fetchPage(contactUrl);
-          return extractEmailsFromText(html);
-        } catch {
-          return [];
-        }
+        const fromFetch = await (async () => {
+          try {
+            const html = await fetchPage(contactUrl);
+            return extractEmailsFromText(html);
+          } catch {
+            return [];
+          }
+        })();
+
+        const fromViewSource = await extractEmailsFromViewSource(contactUrl);
+        return unique([...fromFetch, ...fromViewSource]);
       })
     );
 
-    const allEmails = unique([...mainEmails, ...contactEmailLists.flat()]);
+    const sourceEmails = unique([...homeSourceEmails, ...contactSourceEmailLists.flat()]);
+    const allEmails = unique([...renderedEmails, ...sourceEmails]);
 
     return {
       url,
       domain: new URL(url).hostname,
+      renderedEmails,
+      sourceEmails,
       emails: allEmails,
       contactLinks,
       totalEmails: allEmails.length
@@ -181,6 +228,8 @@ async function processSingleWebsiteWithTab(url) {
           return url;
         }
       })(),
+      renderedEmails: [],
+      sourceEmails: [],
       emails: [],
       contactLinks: [],
       totalEmails: 0,
@@ -191,7 +240,7 @@ async function processSingleWebsiteWithTab(url) {
       try {
         await chrome.tabs.remove(tab.id);
       } catch {
-        // ignore tab close failures
+        // ignore
       }
     }
   }

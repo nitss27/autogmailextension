@@ -118,3 +118,12 @@ tr:last-child td {
   color: #6b7280;
   font-size: 11px;
 }
+
+
+#results {
+  overflow-x: auto;
+}
+
+table {
+  min-width: 900px;
+}
