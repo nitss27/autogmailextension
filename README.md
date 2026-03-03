@@ -5,6 +5,7 @@ A Manifest V3 extension that automates Gmail compose and sends emails **one-by-o
 ## Features
 
 - Manual Gmail flow automation: **Compose → To → Subject → Body → Attach → Send**.
+- Faster send loop while keeping the same sequence, using dynamic waits instead of long fixed delays.
 - Batch sending, one recipient at a time.
 - Input modes:
   - Single email form.
@@ -18,6 +19,9 @@ A Manifest V3 extension that automates Gmail compose and sends emails **one-by-o
 - Continue from unsent entries:
   - skips rows with `sent=yes/true/sent/1/done`
   - in sheet mode tracks sent rows in local extension storage (`sheetSentRowsByUrl`).
+- Sheet sent-status writeback:
+  - if your sheet has a `sent` column, extension attempts to write `YES` for successfully sent rows.
+  - if writeback fails, local sent tracking still prevents re-sending the same rows.
 - Persistent saved settings:
   - last mode
   - Google Sheet URL
@@ -35,7 +39,7 @@ A Manifest V3 extension that automates Gmail compose and sends emails **one-by-o
 
 ## Google Sheet mode (no OAuth)
 
-- Put columns in first row: `to,subject,body` (optional `sent`).
+- Put columns in first row: `to,subject,body` and add `sent` column if you want sheet writeback.
 - Ensure the sheet is accessible as CSV export (public/published as needed).
 - Paste the Google Sheet URL in popup once; it is saved.
 

@@ -1,5 +1,15 @@
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+async function waitFor(getter, timeoutMs = 5000, pollMs = 80) {
+  const start = Date.now();
+  let value = getter();
+  while (!value && Date.now() - start < timeoutMs) {
+    await sleep(pollMs);
+    value = getter();
+  }
+  return value;
+}
+
 function dispatchInput(node, value) {
   node.focus();
   node.value = value;
@@ -8,21 +18,25 @@ function dispatchInput(node, value) {
 }
 
 function findComposeButton() {
-  return document.querySelector("div.T-I.T-I-KE.L3[role='button'][jscontroller='eIu7Db']") ||
+  return (
+    document.querySelector("div.T-I.T-I-KE.L3[role='button'][jscontroller='eIu7Db']") ||
     document.querySelector("div[role='button'][gh='cm']") ||
-    document.querySelector("div[role='button'][jscontroller='eIu7Db']");
+    document.querySelector("div[role='button'][jscontroller='eIu7Db']")
+  );
 }
 
 function findActiveComposeRoot() {
   const dialogs = Array.from(document.querySelectorAll("div[role='dialog']"));
-  return dialogs[dialogs.length - 1] || document;
+  return dialogs[dialogs.length - 1] || null;
 }
 
 function findToInput(root) {
-  return root.querySelector("input[aria-label='To recipients']") ||
+  return (
+    root.querySelector("input[aria-label='To recipients']") ||
     root.querySelector("div.aoD.hl input") ||
     root.querySelector("textarea[name='to']") ||
-    root.querySelector("input[peoplekit-id]");
+    root.querySelector("input[peoplekit-id]")
+  );
 }
 
 function findSubjectInput(root) {
@@ -30,32 +44,34 @@ function findSubjectInput(root) {
 }
 
 function findBodyBox(root) {
-  return root.querySelector("div[role='textbox'][aria-label='Message Body']") ||
-    root.querySelector("div[aria-label='Message Body']");
+  return (
+    root.querySelector("div[role='textbox'][aria-label='Message Body']") ||
+    root.querySelector("div[aria-label='Message Body']")
+  );
 }
 
 function findAttachButton(root) {
-  return root.querySelector("div.a1.aaA.aMZ") ||
+  return (
+    root.querySelector("div.a1.aaA.aMZ") ||
     root.querySelector("div[command='Files']") ||
-    root.querySelector("div[aria-label='Attach files']");
+    root.querySelector("div[aria-label='Attach files']")
+  );
 }
 
 function findFileInput(root) {
-  return root.querySelector("input[type='file'][name='Filedata']") ||
-    root.querySelector("input[type='file']");
+  return root.querySelector("input[type='file'][name='Filedata']") || root.querySelector("input[type='file']");
 }
 
 function findSendButton(root) {
-  return root.querySelector("div.T-I.J-J5-Ji.aoO.v7.T-I-atl.L3[role='button']") ||
+  return (
+    root.querySelector("div.T-I.J-J5-Ji.aoO.v7.T-I-atl.L3[role='button']") ||
     root.querySelector("div[role='button'][data-tooltip^='Send']") ||
-    root.querySelector("div[aria-label^='Send']");
+    root.querySelector("div[aria-label^='Send']")
+  );
 }
 
 function formatBodyToHtml(text) {
-  let escaped = text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  let escaped = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
   escaped = escaped.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
   escaped = escaped.replace(/__(.+?)__/g, "<u>$1</u>");
@@ -97,14 +113,8 @@ async function attachFile(root, attachment) {
   const attachBtn = findAttachButton(root);
   if (!attachBtn) throw new Error("Attachment button not found");
   attachBtn.click();
-  await sleep(300);
 
-  let input = findFileInput(root);
-  const start = Date.now();
-  while (!input && Date.now() - start < 6000) {
-    await sleep(200);
-    input = findFileInput(root);
-  }
+  const input = await waitFor(() => findFileInput(root), 4500, 70);
   if (!input) throw new Error("File input not found");
 
   const file = dataUrlToFile(attachment.dataUrl, attachment.name, attachment.type);
@@ -113,7 +123,7 @@ async function attachFile(root, attachment) {
   input.files = dt.files;
   input.dispatchEvent(new Event("change", { bubbles: true }));
 
-  await sleep(1200);
+  await sleep(500);
   const blocked = root.querySelector(".dN");
   if (blocked && /blocked/i.test(blocked.textContent || "")) {
     throw new Error("Gmail blocked the attachment for security reasons");
@@ -121,22 +131,25 @@ async function attachFile(root, attachment) {
 }
 
 async function sendSingle(row, attachment) {
-  const composeBtn = findComposeButton();
+  const composeBtn = await waitFor(() => findComposeButton(), 5000, 70);
   if (!composeBtn) throw new Error("Compose button not found");
   composeBtn.click();
-  await sleep(1500);
 
-  const root = findActiveComposeRoot();
-  const toInput = findToInput(root);
-  const subjectInput = findSubjectInput(root);
-  const bodyBox = findBodyBox(root);
+  const root = await waitFor(() => findActiveComposeRoot(), 5000, 80);
+  if (!root) throw new Error("Compose window did not open");
+
+  const toInput = await waitFor(() => findToInput(root), 5000, 80);
+  const subjectInput = await waitFor(() => findSubjectInput(root), 5000, 80);
+  const bodyBox = await waitFor(() => findBodyBox(root), 5000, 80);
 
   if (!toInput || !subjectInput || !bodyBox) {
     throw new Error("Compose fields not found");
   }
 
   dispatchInput(toInput, row.to);
-  toInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
+  toInput.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true })
+  );
 
   dispatchInput(subjectInput, row.subject);
 
@@ -146,11 +159,19 @@ async function sendSingle(row, attachment) {
 
   await attachFile(root, attachment);
 
-  const sendBtn = findSendButton(root);
+  const sendBtn = await waitFor(() => findSendButton(root), 5000, 70);
   if (!sendBtn) throw new Error("Send button not found");
   sendBtn.click();
 
-  await sleep(1800);
+  await waitFor(
+    () => {
+      const messageSentToast = document.querySelector("span.bAq");
+      const gone = !document.contains(root);
+      return gone || (messageSentToast && /message sent/i.test(messageSentToast.textContent || ""));
+    },
+    3500,
+    90
+  );
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -168,7 +189,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     for (const row of rows) {
       await sendSingle(row, attachment);
       sentRows.push(row);
-      await sleep(800);
+      await sleep(250);
     }
 
     sendResponse({ ok: true, sentCount: sentRows.length, sentRows });
