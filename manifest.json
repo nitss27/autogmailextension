@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "Domain Email Harvester",
-  "description": "Extracts emails from websites, their source, and contact pages, then copies a domain/email table.",
-  "version": "1.0.0",
-  "permissions": ["storage", "clipboardWrite"],
+  "description": "Opens websites in batches, extracts emails from DOM/source/contact pages, and copies a domain/email table.",
+  "version": "1.1.0",
+  "permissions": ["storage", "clipboardWrite", "tabs", "scripting"],
   "host_permissions": ["<all_urls>"],
   "action": {
     "default_title": "Domain Email Harvester",

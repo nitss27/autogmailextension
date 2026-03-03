@@ -9,9 +9,13 @@
   <body>
     <main>
       <h1>Domain Email Harvester</h1>
-      <p>Enter one URL/domain per line. The extension scans main + contact pages and source HTML for emails.</p>
+      <p>Enter one URL/domain per line. Extension opens websites in batches, extracts emails from rendered page + source + contact links.</p>
 
+      <label class="fieldLabel" for="websiteInput">Websites</label>
       <textarea id="websiteInput" placeholder="example.com&#10;https://openai.com"></textarea>
+
+      <label class="fieldLabel" for="maxTabsAtTime">Max websites opened at a time</label>
+      <input id="maxTabsAtTime" type="number" min="1" max="20" value="5" />
 
       <div class="actions">
         <button id="processBtn">Process Websites</button>

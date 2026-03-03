@@ -1,4 +1,5 @@
 const input = document.getElementById('websiteInput');
+const maxTabsAtTimeInput = document.getElementById('maxTabsAtTime');
 const processBtn = document.getElementById('processBtn');
 const copyBtn = document.getElementById('copyBtn');
 const statusEl = document.getElementById('status');
@@ -11,10 +12,15 @@ function setStatus(message, type = '') {
   statusEl.className = `status ${type}`.trim();
 }
 
-function resultTableRows(results) {
-  return results
+function renderResults(results) {
+  if (!results.length) {
+    resultsEl.innerHTML = '';
+    return;
+  }
+
+  const rows = results
     .map((result) => {
-      const emails = result.emails.length > 0 ? result.emails.join('<br>') : '<span class="small">No emails found</span>';
+      const emails = result.emails.length ? result.emails.join('<br>') : '<span class="small">No emails found</span>';
       const contacts = result.contactLinks.length;
       const errorLine = result.error ? `<div class="small">Error: ${result.error}</div>` : '';
 
@@ -25,13 +31,6 @@ function resultTableRows(results) {
       </tr>`;
     })
     .join('');
-}
-
-function renderResults(results) {
-  if (!results.length) {
-    resultsEl.innerHTML = '';
-    return;
-  }
 
   resultsEl.innerHTML = `<table>
     <thead>
@@ -41,9 +40,7 @@ function renderResults(results) {
         <th>Contact URLs</th>
       </tr>
     </thead>
-    <tbody>
-      ${resultTableRows(results)}
-    </tbody>
+    <tbody>${rows}</tbody>
   </table>`;
 }
 
@@ -55,13 +52,11 @@ function toClipboardTable(results) {
     String(result.contactLinks.length),
     result.error || ''
   ]);
-
   return [headers, ...rows].map((row) => row.join('\t')).join('\n');
 }
 
 async function copyResults(results) {
-  const content = toClipboardTable(results);
-  await navigator.clipboard.writeText(content);
+  await navigator.clipboard.writeText(toClipboardTable(results));
 }
 
 async function processWebsites() {
@@ -70,17 +65,24 @@ async function processWebsites() {
     .map((value) => value.trim())
     .filter(Boolean);
 
+  const maxTabsAtTime = Math.max(1, Math.min(20, Number(maxTabsAtTimeInput.value) || 5));
+  maxTabsAtTimeInput.value = String(maxTabsAtTime);
+
   if (!urls.length) {
     setStatus('Please enter at least one website.', 'error');
     return;
   }
 
-  setStatus('Processing websites...');
+  setStatus(`Processing ${urls.length} websites (batch size: ${maxTabsAtTime})...`);
   processBtn.disabled = true;
   copyBtn.disabled = true;
 
   try {
-    const response = await chrome.runtime.sendMessage({ type: 'PROCESS_URLS', urls });
+    const response = await chrome.runtime.sendMessage({
+      type: 'PROCESS_URLS',
+      urls,
+      maxTabsAtTime
+    });
 
     if (!response?.ok) {
       throw new Error('Unexpected extension response.');
@@ -89,10 +91,10 @@ async function processWebsites() {
     latestResults = response.results || [];
     renderResults(latestResults);
 
-    if (latestResults.length > 0) {
+    if (latestResults.length) {
       await copyResults(latestResults);
       copyBtn.disabled = false;
-      setStatus(`Done. Processed ${latestResults.length} website(s). Table copied to clipboard.`, 'success');
+      setStatus(`Done. Processed ${latestResults.length} website(s). Results copied to clipboard.`, 'success');
     } else {
       setStatus('No valid websites were provided.', 'error');
     }
