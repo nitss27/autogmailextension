@@ -13,7 +13,8 @@ A Manifest V3 extension that automates Gmail compose and sends emails **one-by-o
   - Google Sheet URL (public CSV export, **no OAuth**).
 - Rich body formatting support:
   - raw HTML from sheet/body is preserved if provided,
-  - plus `**bold**`, `__underline__`, and `- bullet items` for plain text.
+  - plus `**bold**`, `__underline__`, and `- bullet items` for plain text,
+  - preserves multi-line body text from quoted CSV cells (line breaks kept).
 - Attachment options:
   - global toggle to send without attachment,
   - in sheet mode, optional row-level attachment rule from `attach` column (`yes/true/1`).

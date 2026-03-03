@@ -35,17 +35,18 @@ function toggleAttachmentUi() {
   sheetAttachRuleEl.disabled = !enabled;
 }
 
-function splitCsvLine(line) {
-  const result = [];
-  let current = "";
+function parseCsvMatrix(input) {
+  const rows = [];
+  let row = [];
+  let cell = "";
   let inQuotes = false;
 
-  for (let i = 0; i < line.length; i += 1) {
-    const char = line[i];
+  for (let i = 0; i < input.length; i += 1) {
+    const ch = input[i];
 
-    if (char === '"') {
-      if (inQuotes && line[i + 1] === '"') {
-        current += '"';
+    if (ch === '"') {
+      if (inQuotes && input[i + 1] === '"') {
+        cell += '"';
         i += 1;
       } else {
         inQuotes = !inQuotes;
@@ -53,28 +54,43 @@ function splitCsvLine(line) {
       continue;
     }
 
-    if (char === "," && !inQuotes) {
-      result.push(current);
-      current = "";
+    if (ch === "," && !inQuotes) {
+      row.push(cell);
+      cell = "";
       continue;
     }
 
-    current += char;
+    if ((ch === "\n" || ch === "\r") && !inQuotes) {
+      if (ch === "\r" && input[i + 1] === "\n") i += 1;
+      row.push(cell);
+      if (row.some((v) => String(v).trim().length > 0)) rows.push(row);
+      row = [];
+      cell = "";
+      continue;
+    }
+
+    cell += ch;
   }
 
-  result.push(current);
-  return result;
+  row.push(cell);
+  if (row.some((v) => String(v).trim().length > 0)) rows.push(row);
+  return rows;
 }
 
 function parseDelimitedRows(inputText) {
-  const clean = inputText.replace(/^\uFEFF/, "").trim();
-  if (!clean) return { delimiter: ",", matrix: [] };
+  const clean = inputText.replace(/^\uFEFF/, "");
+  if (!clean.trim()) return { delimiter: ",", matrix: [] };
 
-  const lines = clean.split(/\r?\n/).filter((line) => line.trim().length > 0);
-  if (!lines.length) return { delimiter: ",", matrix: [] };
+  const firstLine = clean.split(/\r?\n/, 1)[0] || "";
+  const delimiter = firstLine.includes("\t") ? "\t" : ",";
 
-  const delimiter = lines[0].includes("\t") ? "\t" : ",";
-  const matrix = lines.map((line) => (delimiter === "\t" ? line.split("\t") : splitCsvLine(line)));
+  const matrix =
+    delimiter === "\t"
+      ? clean
+          .split(/\r?\n/)
+          .filter((line) => line.trim().length > 0)
+          .map((line) => line.split("\t"))
+      : parseCsvMatrix(clean);
 
   return { delimiter, matrix };
 }
@@ -119,12 +135,12 @@ function parseRowsWithMeta(inputText) {
         rowNumber: i + 2,
         to: String(cols[idx.to] || "").trim(),
         subject: String(cols[idx.subject] || "").trim(),
-        body: String(cols[idx.body] || "").trim(),
+        body: String(cols[idx.body] || ""),
         sent: SENT_VALUES.has(sentVal),
         attachAllowed: ATTACH_VALUES.has(attachVal)
       };
     })
-    .filter((r) => r.to && r.subject && r.body);
+    .filter((r) => r.to && r.subject && String(r.body).trim().length > 0);
 
   return {
     rows,
@@ -294,7 +310,7 @@ async function run() {
         rowNumber: 1,
         to: toEl.value.trim(),
         subject: subjectEl.value.trim(),
-        body: bodyEl.value.trim(),
+        body: bodyEl.value,
         sent: false,
         shouldAttach: enableAttachment
       }
