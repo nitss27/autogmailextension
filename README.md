@@ -13,8 +13,7 @@ For each URL (one-by-one):
 5. Navigate the **same tab** to those secondary pages and extract more emails.
 6. Also fetch raw page source for main + secondary pages for source-level emails (secondary source fetches run in parallel for speed).
 7. Deduplicate emails per domain.
-8. If a human-verification page appears, the run pauses on that active tab for manual solve, then continues automatically.
-9. Close the tab and move to the next URL.
+8. Close the tab and move to the next URL.
 
 The popup shows live progress (`Processing X of Y...`) and stores run state/results in extension storage, so reopening the popup still shows output for copying. It exports a copyable TSV table (`Domain | Emails | Error`).
 

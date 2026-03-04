@@ -3,8 +3,6 @@ const TAB_LOAD_TIMEOUT_MS = 15000;
 const TAB_SETTLE_MS = 150;
 const MAX_SECONDARY_PAGES = 3;
 const RUN_STATE_KEY = 'latestRunState';
-const VERIFICATION_WAIT_TIMEOUT_MS = 120000;
-const VERIFICATION_POLL_MS = 3000;
 
 function normalizeUrl(input) {
   const raw = input.trim();
@@ -34,19 +32,6 @@ function filterExcludedEmails(emails, excludeEmails) {
   if (!excludeEmails?.length) return emails;
   const excluded = new Set(excludeEmails.map((email) => email.toLowerCase()));
   return emails.filter((email) => !excluded.has(email.toLowerCase()));
-}
-
-
-function isHumanVerificationPage(text) {
-  const normalized = (text || '').toLowerCase();
-  return (
-    normalized.includes("verify you are human") ||
-    normalized.includes("verify you're human") ||
-    normalized.includes('captcha') ||
-    normalized.includes('cf-challenge') ||
-    normalized.includes('cloudflare') ||
-    normalized.includes('attention required')
-  );
 }
 
 function sleep(ms) {
@@ -120,7 +105,6 @@ async function inspectTab(tabId) {
     func: () => {
       const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
       const html = document.documentElement?.innerHTML || '';
-      const text = document.body?.innerText || '';
       const emails = [
         ...(html.match(emailRegex) || []),
         ...[...document.querySelectorAll('a[href^="mailto:"]')]
@@ -131,20 +115,16 @@ async function inspectTab(tabId) {
         .map((a) => a.href)
         .filter((href) => href && /(contact|about)/i.test(href));
 
-      const fullText = `${text}\n${html}`;
-      const verificationDetected = /verify\s+you(')?re\s+human|captcha|cf-challenge|cloudflare|attention required/i.test(fullText);
-
       return {
         pageUrl: location.href,
         html,
         emails: [...new Set(emails.map((email) => email.trim().toLowerCase()).filter(Boolean))],
-        secondaryLinks: [...new Set(secondaryLinks)],
-        verificationDetected
+        secondaryLinks: [...new Set(secondaryLinks)]
       };
     }
   });
 
-  return injection?.result || { pageUrl: '', html: '', emails: [], secondaryLinks: [], verificationDetected: false };
+  return injection?.result || { pageUrl: '', html: '', emails: [], secondaryLinks: [] };
 }
 
 async function fetchSourceEmails(url) {
@@ -154,69 +134,14 @@ async function fetchSourceEmails(url) {
   return extractEmailsFromText(html);
 }
 
-
-async function waitForVerificationClear(tabId, requestId, current, total, domain) {
-  const start = Date.now();
-
-  while (Date.now() - start < VERIFICATION_WAIT_TIMEOUT_MS) {
-    chrome.runtime.sendMessage({
-      type: 'PROCESS_PROGRESS',
-      requestId,
-      current,
-      total,
-      domain,
-      note: 'Manual verification detected. Please complete it in the active tab...'
-    }).catch(() => {
-      // popup may be closed
-    });
-
-    await sleep(VERIFICATION_POLL_MS);
-
-    try {
-      const probe = await inspectTab(tabId);
-      const combinedText = `${probe.html}`;
-      if (!probe.verificationDetected && !isHumanVerificationPage(combinedText)) {
-        return true;
-      }
-    } catch {
-      // keep waiting
-    }
-  }
-
-  return false;
-}
-
-async function processOneUrl(url, excludeEmails, progress) {
+async function processOneUrl(url, excludeEmails) {
   let tab = null;
 
   try {
     tab = await createTab(url);
     await activateAndWait(tab.id);
 
-    let firstPass = await inspectTab(tab.id);
-
-    if (firstPass.verificationDetected) {
-      const cleared = await waitForVerificationClear(
-        tab.id,
-        progress?.requestId || '',
-        progress?.current || 0,
-        progress?.total || 0,
-        progress?.domain || new URL(url).hostname
-      );
-
-      if (!cleared) {
-        return {
-          url,
-          domain: new URL(url).hostname,
-          emails: [],
-          totalEmails: 0,
-          error: 'Verification page not cleared within timeout'
-        };
-      }
-
-      firstPass = await inspectTab(tab.id);
-    }
-
+    const firstPass = await inspectTab(tab.id);
     const secondaryQueue = unique(firstPass.secondaryLinks).slice(0, MAX_SECONDARY_PAGES);
     const secondaryEmails = [];
 
@@ -294,7 +219,7 @@ async function runProcessing(urls, requestId, excludeEmails) {
       // popup may be closed
     });
 
-    const result = await processOneUrl(url, excludeEmails, { requestId, current: i + 1, total: urls.length, domain });
+    const result = await processOneUrl(url, excludeEmails);
     results.push(result);
   }
 
