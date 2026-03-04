@@ -127,3 +127,8 @@ tr:last-child td {
 table {
   min-width: 900px;
 }
+
+
+.excludeBox {
+  height: 80px;
+}

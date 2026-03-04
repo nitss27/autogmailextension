@@ -17,6 +17,8 @@ For each URL (one-by-one):
 
 The popup shows live progress (`Processing X of Y...`) and stores run state/results in extension storage, so reopening the popup still shows output for copying. It exports a copyable TSV table (`Domain | Emails | Error`).
 
+You can also use the **Exclude emails** box (one email per line). This list is saved and automatically applied in future runs.
+
 ## Load extension
 
 1. Open `chrome://extensions`
@@ -28,5 +30,6 @@ The popup shows live progress (`Processing X of Y...`) and stores run state/resu
 
 1. Click extension icon.
 2. Paste one URL/domain per line.
-3. Click **Start**.
-4. Wait for completion, then click **Copy Table** (or use auto-copied output).
+3. (Optional) Fill **Exclude emails** with addresses to filter out.
+4. Click **Start**.
+5. Wait for completion, then click **Copy Table** (or use auto-copied output).

@@ -1,4 +1,7 @@
+const SETTINGS_KEY = 'excludeEmailsList';
+
 const input = document.getElementById('websiteInput');
+const excludeInput = document.getElementById('excludeInput');
 const processBtn = document.getElementById('processBtn');
 const copyBtn = document.getElementById('copyBtn');
 const statusEl = document.getElementById('status');
@@ -10,6 +13,24 @@ let activeRequestId = null;
 function setStatus(message, type = '') {
   statusEl.textContent = message;
   statusEl.className = `status ${type}`.trim();
+}
+
+function parseExcludeList(raw) {
+  return [...new Set(
+    raw
+      .split('\n')
+      .map((item) => item.trim().toLowerCase())
+      .filter(Boolean)
+  )];
+}
+
+async function saveSettings() {
+  await chrome.storage.local.set({ [SETTINGS_KEY]: excludeInput.value });
+}
+
+async function loadSettings() {
+  const data = await chrome.storage.local.get(SETTINGS_KEY);
+  excludeInput.value = data[SETTINGS_KEY] || '';
 }
 
 function renderResults(results) {
@@ -90,6 +111,9 @@ async function processWebsites() {
     return;
   }
 
+  const excludeEmails = parseExcludeList(excludeInput.value);
+  await saveSettings();
+
   activeRequestId = crypto.randomUUID();
   setStatus(`Processing 0 of ${urls.length}...`);
   processBtn.disabled = true;
@@ -99,6 +123,7 @@ async function processWebsites() {
     const response = await chrome.runtime.sendMessage({
       type: 'PROCESS_URLS',
       urls,
+      excludeEmails,
       requestId: activeRequestId
     });
 
@@ -125,6 +150,12 @@ async function processWebsites() {
 }
 
 processBtn.addEventListener('click', processWebsites);
+excludeInput.addEventListener('blur', () => {
+  saveSettings().catch(() => {
+    // ignore settings save errors
+  });
+});
+
 copyBtn.addEventListener('click', async () => {
   if (!latestResults.length) {
     setStatus('No results available to copy.', 'error');
@@ -139,6 +170,6 @@ copyBtn.addEventListener('click', async () => {
   }
 });
 
-loadLatestState().catch(() => {
+Promise.all([loadSettings(), loadLatestState()]).catch(() => {
   // ignore bootstrap state errors
 });

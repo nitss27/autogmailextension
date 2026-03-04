@@ -27,6 +27,13 @@ function extractEmailsFromText(text) {
   return unique((text.match(EMAIL_REGEX) || []).map((email) => email.toLowerCase()));
 }
 
+
+function filterExcludedEmails(emails, excludeEmails) {
+  if (!excludeEmails?.length) return emails;
+  const excluded = new Set(excludeEmails.map((email) => email.toLowerCase()));
+  return emails.filter((email) => !excluded.has(email.toLowerCase()));
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -127,7 +134,7 @@ async function fetchSourceEmails(url) {
   return extractEmailsFromText(html);
 }
 
-async function processOneUrl(url) {
+async function processOneUrl(url, excludeEmails) {
   let tab = null;
 
   try {
@@ -153,12 +160,12 @@ async function processOneUrl(url) {
     const sourceEmailsMain = await sourceEmailsMainPromise;
     const sourceEmailsSecondary = (await sourceEmailsSecondaryPromise).flat();
 
-    const emails = unique([
+    const emails = filterExcludedEmails(unique([
       ...firstPass.emails,
       ...secondaryEmails,
       ...sourceEmailsMain,
       ...sourceEmailsSecondary
-    ]);
+    ]), excludeEmails);
 
     return {
       url,
@@ -185,7 +192,7 @@ async function processOneUrl(url) {
   }
 }
 
-async function runProcessing(urls, requestId) {
+async function runProcessing(urls, requestId, excludeEmails) {
   const results = [];
 
   await setRunState({ status: 'running', requestId, total: urls.length, current: 0, domain: '', results: [] });
@@ -212,7 +219,7 @@ async function runProcessing(urls, requestId) {
       // popup may be closed
     });
 
-    const result = await processOneUrl(url);
+    const result = await processOneUrl(url, excludeEmails);
     results.push(result);
   }
 
@@ -233,9 +240,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   const urls = unique((message.urls || []).map(normalizeUrl));
   const requestId = message.requestId || '';
+  const excludeEmails = unique((message.excludeEmails || []).map((email) => String(email).toLowerCase().trim()).filter(Boolean));
 
   (async () => {
-    const results = await runProcessing(urls, requestId);
+    const results = await runProcessing(urls, requestId, excludeEmails);
     sendResponse({ ok: true, results });
   })();
 
