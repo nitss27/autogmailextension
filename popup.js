@@ -101,7 +101,8 @@ chrome.runtime.onMessage.addListener((message) => {
   if (message?.type !== 'PROCESS_PROGRESS') return;
   if (!activeRequestId || message.requestId !== activeRequestId) return;
 
-  setStatus(`Processing ${message.current} of ${message.total}: ${message.domain}`);
+  const suffix = message.note ? ` — ${message.note}` : '';
+  setStatus(`Processing ${message.current} of ${message.total}: ${message.domain}${suffix}`);
 });
 
 async function processWebsites() {
