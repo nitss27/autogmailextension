@@ -30,8 +30,39 @@ function extractEmailsFromText(text) {
 
 function filterExcludedEmails(emails, excludeEmails) {
   if (!excludeEmails?.length) return emails;
-  const excluded = new Set(excludeEmails.map((email) => email.toLowerCase()));
-  return emails.filter((email) => !excluded.has(email.toLowerCase()));
+
+  const exactEmails = new Set();
+  const domainRules = [];
+
+  for (const ruleRaw of excludeEmails) {
+    const rule = String(ruleRaw || '').trim().toLowerCase();
+    if (!rule) continue;
+
+    if (rule.startsWith('@')) {
+      const domain = rule.slice(1).trim();
+      if (domain) domainRules.push(domain);
+      continue;
+    }
+
+    exactEmails.add(rule);
+  }
+
+  return emails.filter((emailRaw) => {
+    const email = String(emailRaw || '').trim().toLowerCase();
+    if (!email) return false;
+    if (exactEmails.has(email)) return false;
+
+    const domain = email.includes('@') ? email.split('@').pop() : '';
+    if (!domain) return true;
+
+    for (const blockedDomain of domainRules) {
+      if (domain === blockedDomain || domain.endsWith(`.${blockedDomain}`)) {
+        return false;
+      }
+    }
+
+    return true;
+  });
 }
 
 function sleep(ms) {

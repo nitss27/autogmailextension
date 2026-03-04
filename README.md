@@ -17,7 +17,9 @@ For each URL (one-by-one):
 
 The popup shows live progress (`Processing X of Y...`) and stores run state/results in extension storage, so reopening the popup still shows output for copying. It exports a copyable TSV table (`Domain | Emails | Error`).
 
-You can also use the **Exclude emails** box (one email per line). This list is saved and automatically applied in future runs.
+You can also use the **Exclude emails** box (one rule per line). This list is saved and automatically applied in future runs.
+- `person@example.com` excludes that exact email.
+- `@example.com` excludes all emails from that domain and its subdomains.
 
 ## Load extension
 
