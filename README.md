@@ -39,4 +39,4 @@ You can also use the **Exclude emails** box (one rule per line). This list is sa
 
 ## Notes
 
-If a site responds with robot/human verification pages, that site is skipped with error: `Skipped due to robot verification message. Verify first human.`
+If a site contains the message `Verify your are human by completing the action below` and no emails are found, that site is skipped with error: `Skipped due to robot verification message. Verify first human.`
