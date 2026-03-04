@@ -35,3 +35,8 @@ You can also use the **Exclude emails** box (one rule per line). This list is sa
 3. (Optional) Fill **Exclude emails** with addresses to filter out.
 4. Click **Start**.
 5. Wait for completion, then click **Copy Table** (or use auto-copied output).
+
+
+## Notes
+
+If a site responds with robot/human verification pages, that site is skipped with error: `Skipped due to robot verification message. Verify first human.`

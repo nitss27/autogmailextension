@@ -65,6 +65,20 @@ function filterExcludedEmails(emails, excludeEmails) {
   });
 }
 
+
+function isRobotVerificationContent(text) {
+  const normalized = String(text || '').toLowerCase();
+  return (
+    normalized.includes('verify your are human') ||
+    normalized.includes("verify you're human") ||
+    normalized.includes('verify you are human') ||
+    normalized.includes('pass a security review before you can proceed') ||
+    normalized.includes('captcha') ||
+    normalized.includes('cf-challenge') ||
+    normalized.includes('attention required')
+  );
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -136,6 +150,7 @@ async function inspectTab(tabId) {
     func: () => {
       const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
       const html = document.documentElement?.innerHTML || '';
+      const text = document.body?.innerText || '';
       const emails = [
         ...(html.match(emailRegex) || []),
         ...[...document.querySelectorAll('a[href^="mailto:"]')]
@@ -146,23 +161,31 @@ async function inspectTab(tabId) {
         .map((a) => a.href)
         .filter((href) => href && /(contact|about)/i.test(href));
 
+      const robotVerificationDetected = /verify\s+you(')?re?\s+human|pass a security review before you can proceed|captcha|cf-challenge|attention required/i.test(`${text}\n${html}`);
+
       return {
         pageUrl: location.href,
         html,
+        text,
         emails: [...new Set(emails.map((email) => email.trim().toLowerCase()).filter(Boolean))],
-        secondaryLinks: [...new Set(secondaryLinks)]
+        secondaryLinks: [...new Set(secondaryLinks)],
+        robotVerificationDetected
       };
     }
   });
 
-  return injection?.result || { pageUrl: '', html: '', emails: [], secondaryLinks: [] };
+  return injection?.result || { pageUrl: '', html: '', text: '', emails: [], secondaryLinks: [], robotVerificationDetected: false };
 }
 
-async function fetchSourceEmails(url) {
+async function fetchSourcePage(url) {
   const response = await fetch(url, { method: 'GET', redirect: 'follow', credentials: 'omit' });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const html = await response.text();
-  return extractEmailsFromText(html);
+  return {
+    html,
+    emails: extractEmailsFromText(html),
+    robotVerificationDetected: isRobotVerificationContent(html)
+  };
 }
 
 async function processOneUrl(url, excludeEmails) {
@@ -173,6 +196,9 @@ async function processOneUrl(url, excludeEmails) {
     await activateAndWait(tab.id);
 
     const firstPass = await inspectTab(tab.id);
+    if (firstPass.robotVerificationDetected || isRobotVerificationContent(firstPass.text) || isRobotVerificationContent(firstPass.html)) {
+      throw new Error('Skipped due to robot verification message. Verify first human.');
+    }
     const secondaryQueue = unique(firstPass.secondaryLinks).slice(0, MAX_SECONDARY_PAGES);
     const secondaryEmails = [];
 
@@ -180,16 +206,26 @@ async function processOneUrl(url, excludeEmails) {
       await chrome.tabs.update(tab.id, { url: link, active: true });
       await activateAndWait(tab.id);
       const secondaryPass = await inspectTab(tab.id);
+      if (secondaryPass.robotVerificationDetected || isRobotVerificationContent(secondaryPass.text) || isRobotVerificationContent(secondaryPass.html)) {
+        throw new Error('Skipped due to robot verification message. Verify first human.');
+      }
       secondaryEmails.push(...secondaryPass.emails);
     }
 
-    const sourceEmailsMainPromise = fetchSourceEmails(url).catch(() => []);
-    const sourceEmailsSecondaryPromise = Promise.all(
-      secondaryQueue.map((link) => fetchSourceEmails(link).catch(() => []))
+    const sourceMainPromise = fetchSourcePage(url).catch(() => ({ html: '', emails: [], robotVerificationDetected: false }));
+    const sourceSecondaryPromise = Promise.all(
+      secondaryQueue.map((link) => fetchSourcePage(link).catch(() => ({ html: '', emails: [], robotVerificationDetected: false })))
     );
 
-    const sourceEmailsMain = await sourceEmailsMainPromise;
-    const sourceEmailsSecondary = (await sourceEmailsSecondaryPromise).flat();
+    const sourceMain = await sourceMainPromise;
+    const sourceSecondary = await sourceSecondaryPromise;
+
+    if (sourceMain.robotVerificationDetected || sourceSecondary.some((item) => item.robotVerificationDetected)) {
+      throw new Error('Skipped due to robot verification message. Verify first human.');
+    }
+
+    const sourceEmailsMain = sourceMain.emails;
+    const sourceEmailsSecondary = sourceSecondary.flatMap((item) => item.emails);
 
     const emails = filterExcludedEmails(unique([
       ...firstPass.emails,
