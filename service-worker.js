@@ -315,19 +315,6 @@ async function runProcessing(urls, requestId, excludeEmails, options, startIndex
         }
       })();
 
-      await setRunState({
-        status: 'running',
-        requestId,
-        total: urls.length,
-        current: i + 1,
-        domain,
-        results,
-        urls,
-        nextIndex: i,
-        excludeEmails,
-        tabLoadTimeoutMs: options.tabLoadTimeoutMs
-      });
-
       chrome.runtime.sendMessage({
         type: 'PROCESS_PROGRESS',
         requestId,
@@ -341,6 +328,15 @@ async function runProcessing(urls, requestId, excludeEmails, options, startIndex
       const result = await processOneUrl(url, excludeEmails, options);
       if (result) {
         results.push(result);
+
+        chrome.runtime.sendMessage({
+          type: 'PROCESS_RESULT',
+          requestId,
+          index: i,
+          result
+        }).catch(() => {
+          // popup may be closed
+        });
       }
 
       await setRunState({

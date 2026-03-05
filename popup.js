@@ -138,10 +138,21 @@ async function loadLatestState() {
 }
 
 chrome.runtime.onMessage.addListener((message) => {
-  if (message?.type !== 'PROCESS_PROGRESS') return;
   if (!activeRequestId || message.requestId !== activeRequestId) return;
 
-  setStatus(`Processing ${message.current} of ${message.total}: ${message.domain}`);
+  if (message?.type === 'PROCESS_PROGRESS') {
+    setStatus(`Processing ${message.current} of ${message.total}: ${message.domain}`);
+    return;
+  }
+
+  if (message?.type === 'PROCESS_RESULT') {
+    const index = Number(message.index);
+    if (Number.isInteger(index) && index >= 0 && message.result) {
+      latestResults[index] = message.result;
+      renderResults(latestResults.filter(Boolean));
+      copyBtn.disabled = true;
+    }
+  }
 });
 
 async function startNewProcessing() {
@@ -156,6 +167,8 @@ async function startNewProcessing() {
   await saveSettings();
 
   activeRequestId = crypto.randomUUID();
+  latestResults = [];
+  renderResults([]);
   setStatus(`Processing 0 of ${urls.length}...`);
   setProcessingUi(true);
   copyBtn.disabled = true;
