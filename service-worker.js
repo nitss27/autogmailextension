@@ -4,6 +4,8 @@ const TAB_SETTLE_MS = 150;
 const MAX_SECONDARY_PAGES = 3;
 const RUN_STATE_KEY = 'latestRunState';
 
+let runInProgress = false;
+
 function normalizeUrl(input) {
   const raw = input.trim();
   if (!raw) return null;
@@ -93,6 +95,10 @@ async function setRunState(state) {
 async function getRunState() {
   const data = await chrome.storage.local.get(RUN_STATE_KEY);
   return data[RUN_STATE_KEY] || null;
+}
+
+async function clearRunState() {
+  await chrome.storage.local.remove(RUN_STATE_KEY);
 }
 
 function waitForTabComplete(tabId, timeoutMs = TAB_LOAD_TIMEOUT_MS) {
@@ -247,39 +253,101 @@ async function processOneUrl(url, excludeEmails) {
   }
 }
 
-async function runProcessing(urls, requestId, excludeEmails) {
-  const results = [];
+async function runProcessing(urls, requestId, excludeEmails, startIndex = 0, initialResults = []) {
+  const results = [...initialResults];
+  runInProgress = true;
 
-  await setRunState({ status: 'running', requestId, total: urls.length, current: 0, domain: '', results: [] });
-
-  for (let i = 0; i < urls.length; i += 1) {
-    const url = urls[i];
-    const domain = (() => {
-      try {
-        return new URL(url).hostname;
-      } catch {
-        return url;
-      }
-    })();
-
-    await setRunState({ status: 'running', requestId, total: urls.length, current: i + 1, domain, results });
-
-    chrome.runtime.sendMessage({
-      type: 'PROCESS_PROGRESS',
+  try {
+    await setRunState({
+      status: 'running',
       requestId,
-      current: i + 1,
       total: urls.length,
-      domain
-    }).catch(() => {
-      // popup may be closed
+      current: startIndex,
+      domain: '',
+      results,
+      urls,
+      nextIndex: startIndex,
+      excludeEmails
     });
 
-    const result = await processOneUrl(url, excludeEmails);
-    results.push(result);
-  }
+    for (let i = startIndex; i < urls.length; i += 1) {
+      const url = urls[i];
+      const domain = (() => {
+        try {
+          return new URL(url).hostname;
+        } catch {
+          return url;
+        }
+      })();
 
-  await setRunState({ status: 'done', requestId, total: urls.length, current: urls.length, domain: '', results });
-  return results;
+      await setRunState({
+        status: 'running',
+        requestId,
+        total: urls.length,
+        current: i + 1,
+        domain,
+        results,
+        urls,
+        nextIndex: i,
+        excludeEmails
+      });
+
+      chrome.runtime.sendMessage({
+        type: 'PROCESS_PROGRESS',
+        requestId,
+        current: i + 1,
+        total: urls.length,
+        domain
+      }).catch(() => {
+        // popup may be closed
+      });
+
+      const result = await processOneUrl(url, excludeEmails);
+      results.push(result);
+
+      await setRunState({
+        status: 'running',
+        requestId,
+        total: urls.length,
+        current: i + 1,
+        domain,
+        results,
+        urls,
+        nextIndex: i + 1,
+        excludeEmails
+      });
+    }
+
+    await setRunState({
+      status: 'done',
+      requestId,
+      total: urls.length,
+      current: urls.length,
+      domain: '',
+      results,
+      urls,
+      nextIndex: urls.length,
+      excludeEmails
+    });
+
+    return results;
+  } catch (error) {
+    const nextIndex = Math.min(results.length, urls.length);
+    await setRunState({
+      status: 'paused',
+      requestId,
+      total: urls.length,
+      current: nextIndex,
+      domain: '',
+      results,
+      urls,
+      nextIndex,
+      excludeEmails
+    });
+    throw error;
+  } finally {
+    runInProgress = false;
+  }
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -291,16 +359,70 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
-  if (message?.type !== 'PROCESS_URLS') return false;
+  if (message?.type === 'RESET_RUN_STATE') {
+    (async () => {
+      await clearRunState();
+      sendResponse({ ok: true });
+    })();
+    return true;
+  }
 
-  const urls = unique((message.urls || []).map(normalizeUrl));
-  const requestId = message.requestId || '';
-  const excludeEmails = unique((message.excludeEmails || []).map((email) => String(email).toLowerCase().trim()).filter(Boolean));
+  if (message?.type === 'PROCESS_URLS') {
+    if (runInProgress) {
+      sendResponse({ ok: false, error: 'A run is already in progress.' });
+      return false;
+    }
 
-  (async () => {
-    const results = await runProcessing(urls, requestId, excludeEmails);
-    sendResponse({ ok: true, results });
-  })();
+    const urls = (message.urls || []).map((item) => normalizeUrl(String(item || ''))).filter(Boolean);
+    const requestId = message.requestId || '';
+    const excludeEmails = unique((message.excludeEmails || []).map((email) => String(email).toLowerCase().trim()).filter(Boolean));
 
-  return true;
+    (async () => {
+      try {
+        if (message.reset) await clearRunState();
+        const results = await runProcessing(urls, requestId, excludeEmails, 0, []);
+        sendResponse({ ok: true, results });
+      } catch (error) {
+        sendResponse({ ok: false, error: error instanceof Error ? error.message : 'Unknown error' });
+      }
+    })();
+
+    return true;
+  }
+
+  if (message?.type === 'PROCESS_REMAINING') {
+    if (runInProgress) {
+      sendResponse({ ok: false, error: 'A run is already in progress.' });
+      return false;
+    }
+
+    (async () => {
+      try {
+        const state = await getRunState();
+        if (!state?.urls?.length) {
+          sendResponse({ ok: false, error: 'No previous list found to continue.' });
+          return;
+        }
+
+        const startIndex = Math.max(0, Math.min(Number(state.nextIndex || state.results?.length || 0), state.urls.length));
+        const baseResults = Array.isArray(state.results) ? state.results.slice(0, startIndex) : [];
+        const excludeEmails = unique((message.excludeEmails || state.excludeEmails || []).map((email) => String(email).toLowerCase().trim()).filter(Boolean));
+        const requestId = message.requestId || '';
+
+        if (startIndex >= state.urls.length) {
+          sendResponse({ ok: true, results: state.results || [] });
+          return;
+        }
+
+        const results = await runProcessing(state.urls, requestId, excludeEmails, startIndex, baseResults);
+        sendResponse({ ok: true, results });
+      } catch (error) {
+        sendResponse({ ok: false, error: error instanceof Error ? error.message : 'Unknown error' });
+      }
+    })();
+
+    return true;
+  }
+
+  return false;
 });

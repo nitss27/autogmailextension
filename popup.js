@@ -3,7 +3,9 @@ const SETTINGS_KEY = 'excludeEmailsList';
 const input = document.getElementById('websiteInput');
 const excludeInput = document.getElementById('excludeInput');
 const processBtn = document.getElementById('processBtn');
+const continueBtn = document.getElementById('continueBtn');
 const copyBtn = document.getElementById('copyBtn');
+const clearListBtn = document.getElementById('clearListBtn');
 const statusEl = document.getElementById('status');
 const resultsEl = document.getElementById('results');
 
@@ -74,26 +76,41 @@ async function copyResults(results) {
   await navigator.clipboard.writeText(toClipboardTable(results));
 }
 
+function setProcessingUi(running) {
+  processBtn.disabled = running;
+  continueBtn.disabled = running;
+}
+
 async function loadLatestState() {
   const response = await chrome.runtime.sendMessage({ type: 'GET_LATEST_RESULTS' });
   if (!response?.ok || !response.state) return;
 
   const { state } = response;
-  if (state.status === 'running') {
-    activeRequestId = state.requestId || activeRequestId;
-    setStatus(`Processing ${state.current} of ${state.total}: ${state.domain || '...'}`);
-    processBtn.disabled = true;
-  }
 
   if (Array.isArray(state.results) && state.results.length) {
     latestResults = state.results;
     renderResults(latestResults);
     copyBtn.disabled = false;
+  }
 
-    if (state.status === 'done') {
-      setStatus(`Done. Processed ${state.total} website(s). You can copy the table now.`, 'success');
-      processBtn.disabled = false;
-    }
+  if (state.status === 'running') {
+    activeRequestId = state.requestId || activeRequestId;
+    setStatus(`Processing ${state.current} of ${state.total}: ${state.domain || '...'}`);
+    setProcessingUi(true);
+    return;
+  }
+
+  setProcessingUi(false);
+
+  if (state.status === 'done') {
+    setStatus(`Done. Processed ${state.total} website(s). You can copy the table now.`, 'success');
+    return;
+  }
+
+  const nextIndex = Number(state.nextIndex || 0);
+  const total = Array.isArray(state.urls) ? state.urls.length : 0;
+  if (state.status === 'paused' && nextIndex < total) {
+    setStatus(`Paused at ${nextIndex} of ${total}. Click Continue Left to process remaining websites.`, '');
   }
 }
 
@@ -104,7 +121,7 @@ chrome.runtime.onMessage.addListener((message) => {
   setStatus(`Processing ${message.current} of ${message.total}: ${message.domain}`);
 });
 
-async function processWebsites() {
+async function startNewProcessing() {
   const urls = input.value.split('\n').map((value) => value.trim()).filter(Boolean);
   if (!urls.length) {
     setStatus('Please enter at least one website.', 'error');
@@ -116,7 +133,7 @@ async function processWebsites() {
 
   activeRequestId = crypto.randomUUID();
   setStatus(`Processing 0 of ${urls.length}...`);
-  processBtn.disabled = true;
+  setProcessingUi(true);
   copyBtn.disabled = true;
 
   try {
@@ -124,11 +141,12 @@ async function processWebsites() {
       type: 'PROCESS_URLS',
       urls,
       excludeEmails,
-      requestId: activeRequestId
+      requestId: activeRequestId,
+      reset: true
     });
 
     if (!response?.ok) {
-      throw new Error('Unexpected extension response.');
+      throw new Error(response?.error || 'Unexpected extension response.');
     }
 
     latestResults = response.results || [];
@@ -144,12 +162,68 @@ async function processWebsites() {
   } catch (error) {
     setStatus(`Failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
   } finally {
-    processBtn.disabled = false;
+    setProcessingUi(false);
     activeRequestId = null;
   }
 }
 
-processBtn.addEventListener('click', processWebsites);
+async function continueRemaining() {
+  const excludeEmails = parseExcludeList(excludeInput.value);
+  await saveSettings();
+
+  activeRequestId = crypto.randomUUID();
+  setStatus('Continuing remaining websites...');
+  setProcessingUi(true);
+  copyBtn.disabled = true;
+
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'PROCESS_REMAINING',
+      requestId: activeRequestId,
+      excludeEmails
+    });
+
+    if (!response?.ok) {
+      throw new Error(response?.error || 'No paused run found to continue.');
+    }
+
+    latestResults = response.results || [];
+    renderResults(latestResults);
+
+    if (latestResults.length) {
+      await copyResults(latestResults);
+      copyBtn.disabled = false;
+      setStatus(`Done. Processed ${latestResults.length} website(s). Table copied to clipboard.`, 'success');
+    } else {
+      setStatus('No results available to continue.', 'error');
+    }
+  } catch (error) {
+    setStatus(`Failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
+  } finally {
+    setProcessingUi(false);
+    activeRequestId = null;
+  }
+}
+
+async function clearListAndReset() {
+  input.value = '';
+  latestResults = [];
+  renderResults([]);
+  copyBtn.disabled = true;
+  setStatus('Website list and current results cleared.');
+  activeRequestId = null;
+
+  try {
+    await chrome.runtime.sendMessage({ type: 'RESET_RUN_STATE' });
+  } catch {
+    // ignore reset errors
+  }
+}
+
+processBtn.addEventListener('click', startNewProcessing);
+continueBtn.addEventListener('click', continueRemaining);
+clearListBtn.addEventListener('click', clearListAndReset);
+
 excludeInput.addEventListener('blur', () => {
   saveSettings().catch(() => {
     // ignore settings save errors
@@ -164,12 +238,14 @@ copyBtn.addEventListener('click', async () => {
 
   try {
     await copyResults(latestResults);
-    setStatus('Copied results table to clipboard.', 'success');
+    setStatus('Copied results to clipboard.', 'success');
   } catch (error) {
     setStatus(`Copy failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
   }
 });
 
-Promise.all([loadSettings(), loadLatestState()]).catch(() => {
-  // ignore bootstrap state errors
-});
+(async () => {
+  copyBtn.disabled = true;
+  await loadSettings();
+  await loadLatestState();
+})();

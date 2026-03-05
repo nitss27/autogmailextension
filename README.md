@@ -4,7 +4,7 @@ Manifest V3 extension for sequential, active-tab email extraction.
 
 ## Workflow
 
-For each URL (one-by-one):
+For each URL (one-by-one, preserving the same order as entered):
 
 1. Open a new tab with `active: true`.
 2. Wait for `tabs.onUpdated` status `complete`.
@@ -15,7 +15,7 @@ For each URL (one-by-one):
 7. Deduplicate emails per domain.
 8. Close the tab and move to the next URL.
 
-The popup shows live progress (`Processing X of Y...`) and stores run state/results in extension storage, so reopening the popup still shows output for copying. It exports a copyable TSV table (`Domain | Emails | Error`).
+The popup shows live progress (`Processing X of Y...`) and stores run state/results in extension storage, so reopening the popup still shows output for copying. You can now choose **Start New**, **Continue Left** (resume unprocessed websites), or **Clear List**. It exports a copyable TSV table (`Domain | Emails | Error`).
 
 You can also use the **Exclude emails** box (one rule per line). This list is saved and automatically applied in future runs.
 - `person@example.com` excludes that exact email.
