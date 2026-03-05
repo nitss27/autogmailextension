@@ -1,10 +1,11 @@
 const EMAIL_REGEX = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
-const TAB_LOAD_TIMEOUT_MS = 15000;
-const TAB_SETTLE_MS = 150;
+const DEFAULT_TAB_LOAD_TIMEOUT_MS = 15000;
+const TAB_SETTLE_MS = 50;
 const MAX_SECONDARY_PAGES = 3;
 const RUN_STATE_KEY = 'latestRunState';
 
 let runInProgress = false;
+let stopRequested = false;
 
 function normalizeUrl(input) {
   const raw = input.trim();
@@ -101,7 +102,7 @@ async function clearRunState() {
   await chrome.storage.local.remove(RUN_STATE_KEY);
 }
 
-function waitForTabComplete(tabId, timeoutMs = TAB_LOAD_TIMEOUT_MS) {
+function waitForTabComplete(tabId, timeoutMs = DEFAULT_TAB_LOAD_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
     let done = false;
 
@@ -132,11 +133,11 @@ function waitForTabComplete(tabId, timeoutMs = TAB_LOAD_TIMEOUT_MS) {
   });
 }
 
-async function activateAndWait(tabId) {
+async function activateAndWait(tabId, tabLoadTimeoutMs) {
   const tab = await chrome.tabs.get(tabId);
   await chrome.windows.update(tab.windowId, { focused: true });
   await chrome.tabs.update(tabId, { active: true });
-  await waitForTabComplete(tabId);
+  await waitForTabComplete(tabId, tabLoadTimeoutMs);
   await sleep(TAB_SETTLE_MS);
 }
 
@@ -185,12 +186,17 @@ async function fetchSourcePage(url) {
   };
 }
 
-async function processOneUrl(url, excludeEmails) {
+async function processOneUrl(url, excludeEmails, options) {
   let tab = null;
+  const tabLoadTimeoutMs = options.tabLoadTimeoutMs;
 
   try {
+    if (stopRequested) {
+      return null;
+    }
+
     tab = await createTab(url);
-    await activateAndWait(tab.id);
+    await activateAndWait(tab.id, tabLoadTimeoutMs);
 
     const firstPass = await inspectTab(tab.id);
     const secondaryQueue = unique(firstPass.secondaryLinks).slice(0, MAX_SECONDARY_PAGES);
@@ -198,11 +204,16 @@ async function processOneUrl(url, excludeEmails) {
     let verificationSeen = firstPass.robotVerificationDetected || isRobotVerificationContent(firstPass.text) || isRobotVerificationContent(firstPass.html);
 
     for (const link of secondaryQueue) {
+      if (stopRequested) break;
       await chrome.tabs.update(tab.id, { url: link, active: true });
-      await activateAndWait(tab.id);
+      await activateAndWait(tab.id, tabLoadTimeoutMs);
       const secondaryPass = await inspectTab(tab.id);
       verificationSeen = verificationSeen || secondaryPass.robotVerificationDetected || isRobotVerificationContent(secondaryPass.text) || isRobotVerificationContent(secondaryPass.html);
       secondaryEmails.push(...secondaryPass.emails);
+    }
+
+    if (stopRequested) {
+      return null;
     }
 
     const sourceMainPromise = fetchSourcePage(url).catch(() => ({ html: '', emails: [], robotVerificationDetected: false }));
@@ -253,9 +264,16 @@ async function processOneUrl(url, excludeEmails) {
   }
 }
 
-async function runProcessing(urls, requestId, excludeEmails, startIndex = 0, initialResults = []) {
+function resolveTimeoutMs(raw) {
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 1000) return DEFAULT_TAB_LOAD_TIMEOUT_MS;
+  return Math.round(value);
+}
+
+async function runProcessing(urls, requestId, excludeEmails, options, startIndex = 0, initialResults = []) {
   const results = [...initialResults];
   runInProgress = true;
+  stopRequested = false;
 
   try {
     await setRunState({
@@ -267,10 +285,27 @@ async function runProcessing(urls, requestId, excludeEmails, startIndex = 0, ini
       results,
       urls,
       nextIndex: startIndex,
-      excludeEmails
+      excludeEmails,
+      tabLoadTimeoutMs: options.tabLoadTimeoutMs
     });
 
     for (let i = startIndex; i < urls.length; i += 1) {
+      if (stopRequested) {
+        await setRunState({
+          status: 'paused',
+          requestId,
+          total: urls.length,
+          current: i,
+          domain: '',
+          results,
+          urls,
+          nextIndex: i,
+          excludeEmails,
+          tabLoadTimeoutMs: options.tabLoadTimeoutMs
+        });
+        return results;
+      }
+
       const url = urls[i];
       const domain = (() => {
         try {
@@ -289,7 +324,8 @@ async function runProcessing(urls, requestId, excludeEmails, startIndex = 0, ini
         results,
         urls,
         nextIndex: i,
-        excludeEmails
+        excludeEmails,
+        tabLoadTimeoutMs: options.tabLoadTimeoutMs
       });
 
       chrome.runtime.sendMessage({
@@ -302,11 +338,13 @@ async function runProcessing(urls, requestId, excludeEmails, startIndex = 0, ini
         // popup may be closed
       });
 
-      const result = await processOneUrl(url, excludeEmails);
-      results.push(result);
+      const result = await processOneUrl(url, excludeEmails, options);
+      if (result) {
+        results.push(result);
+      }
 
       await setRunState({
-        status: 'running',
+        status: stopRequested ? 'paused' : 'running',
         requestId,
         total: urls.length,
         current: i + 1,
@@ -314,8 +352,13 @@ async function runProcessing(urls, requestId, excludeEmails, startIndex = 0, ini
         results,
         urls,
         nextIndex: i + 1,
-        excludeEmails
+        excludeEmails,
+        tabLoadTimeoutMs: options.tabLoadTimeoutMs
       });
+
+      if (stopRequested) {
+        return results;
+      }
     }
 
     await setRunState({
@@ -327,7 +370,8 @@ async function runProcessing(urls, requestId, excludeEmails, startIndex = 0, ini
       results,
       urls,
       nextIndex: urls.length,
-      excludeEmails
+      excludeEmails,
+      tabLoadTimeoutMs: options.tabLoadTimeoutMs
     });
 
     return results;
@@ -342,11 +386,13 @@ async function runProcessing(urls, requestId, excludeEmails, startIndex = 0, ini
       results,
       urls,
       nextIndex,
-      excludeEmails
+      excludeEmails,
+      tabLoadTimeoutMs: options.tabLoadTimeoutMs
     });
     throw error;
   } finally {
     runInProgress = false;
+    stopRequested = false;
   }
 }
 
@@ -357,6 +403,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       sendResponse({ ok: true, state });
     })();
     return true;
+  }
+
+  if (message?.type === 'STOP_PROCESSING') {
+    stopRequested = true;
+    sendResponse({ ok: true });
+    return false;
   }
 
   if (message?.type === 'RESET_RUN_STATE') {
@@ -376,11 +428,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     const urls = (message.urls || []).map((item) => normalizeUrl(String(item || ''))).filter(Boolean);
     const requestId = message.requestId || '';
     const excludeEmails = unique((message.excludeEmails || []).map((email) => String(email).toLowerCase().trim()).filter(Boolean));
+    const options = {
+      tabLoadTimeoutMs: resolveTimeoutMs(message.tabLoadTimeoutMs)
+    };
 
     (async () => {
       try {
         if (message.reset) await clearRunState();
-        const results = await runProcessing(urls, requestId, excludeEmails, 0, []);
+        const results = await runProcessing(urls, requestId, excludeEmails, options, 0, []);
         sendResponse({ ok: true, results });
       } catch (error) {
         sendResponse({ ok: false, error: error instanceof Error ? error.message : 'Unknown error' });
@@ -408,13 +463,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         const baseResults = Array.isArray(state.results) ? state.results.slice(0, startIndex) : [];
         const excludeEmails = unique((message.excludeEmails || state.excludeEmails || []).map((email) => String(email).toLowerCase().trim()).filter(Boolean));
         const requestId = message.requestId || '';
+        const options = {
+          tabLoadTimeoutMs: resolveTimeoutMs(message.tabLoadTimeoutMs || state.tabLoadTimeoutMs)
+        };
 
         if (startIndex >= state.urls.length) {
           sendResponse({ ok: true, results: state.results || [] });
           return;
         }
 
-        const results = await runProcessing(state.urls, requestId, excludeEmails, startIndex, baseResults);
+        const results = await runProcessing(state.urls, requestId, excludeEmails, options, startIndex, baseResults);
         sendResponse({ ok: true, results });
       } catch (error) {
         sendResponse({ ok: false, error: error instanceof Error ? error.message : 'Unknown error' });

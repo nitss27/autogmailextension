@@ -15,9 +15,11 @@ For each URL (one-by-one, preserving the same order as entered):
 7. Deduplicate emails per domain.
 8. Close the tab and move to the next URL.
 
-The popup shows live progress (`Processing X of Y...`) and stores run state/results in extension storage, so reopening the popup still shows output for copying. You can now choose **Start New**, **Continue Left** (resume unprocessed websites), or **Clear List**. It exports a copyable TSV table (`Domain | Emails | Error`).
+The popup shows live progress (`Processing X of Y...`) and stores run state/results in extension storage, so reopening the popup still shows output for copying. You can now choose **Start New**, **Continue Left** (resume unprocessed websites), **Stop** (pause after current website), or **Clear List**. It exports a copyable TSV table (`Domain | Emails | Error`).
 
 You can also use the **Exclude emails** box (one rule per line). This list is saved and automatically applied in future runs.
+
+You can set **Tab load timeout (ms)** manually in the popup. This setting is saved; if the box is cleared, the extension falls back to the default timeout (`15000ms`).
 - `person@example.com` excludes that exact email.
 - `@example.com` excludes all emails from that domain and its subdomains.
 

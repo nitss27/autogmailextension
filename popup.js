@@ -1,9 +1,12 @@
 const SETTINGS_KEY = 'excludeEmailsList';
+const SETTINGS_TIMEOUT_KEY = 'tabLoadTimeoutMs';
 
 const input = document.getElementById('websiteInput');
 const excludeInput = document.getElementById('excludeInput');
+const timeoutInput = document.getElementById('timeoutInput');
 const processBtn = document.getElementById('processBtn');
 const continueBtn = document.getElementById('continueBtn');
+const stopBtn = document.getElementById('stopBtn');
 const copyBtn = document.getElementById('copyBtn');
 const clearListBtn = document.getElementById('clearListBtn');
 const statusEl = document.getElementById('status');
@@ -26,13 +29,26 @@ function parseExcludeList(raw) {
   )];
 }
 
+function parseTimeoutValue(raw) {
+  const value = String(raw || '').trim();
+  if (!value) return null;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 1000) return null;
+  return Math.round(numeric);
+}
+
 async function saveSettings() {
-  await chrome.storage.local.set({ [SETTINGS_KEY]: excludeInput.value });
+  const tabLoadTimeoutMs = parseTimeoutValue(timeoutInput.value);
+  await chrome.storage.local.set({
+    [SETTINGS_KEY]: excludeInput.value,
+    [SETTINGS_TIMEOUT_KEY]: tabLoadTimeoutMs === null ? '' : String(tabLoadTimeoutMs)
+  });
 }
 
 async function loadSettings() {
-  const data = await chrome.storage.local.get(SETTINGS_KEY);
+  const data = await chrome.storage.local.get([SETTINGS_KEY, SETTINGS_TIMEOUT_KEY]);
   excludeInput.value = data[SETTINGS_KEY] || '';
+  timeoutInput.value = data[SETTINGS_TIMEOUT_KEY] || '';
 }
 
 function renderResults(results) {
@@ -79,6 +95,13 @@ async function copyResults(results) {
 function setProcessingUi(running) {
   processBtn.disabled = running;
   continueBtn.disabled = running;
+  stopBtn.disabled = !running;
+}
+
+function getRunOptions() {
+  return {
+    tabLoadTimeoutMs: parseTimeoutValue(timeoutInput.value)
+  };
 }
 
 async function loadLatestState() {
@@ -129,6 +152,7 @@ async function startNewProcessing() {
   }
 
   const excludeEmails = parseExcludeList(excludeInput.value);
+  const options = getRunOptions();
   await saveSettings();
 
   activeRequestId = crypto.randomUUID();
@@ -142,7 +166,8 @@ async function startNewProcessing() {
       urls,
       excludeEmails,
       requestId: activeRequestId,
-      reset: true
+      reset: true,
+      tabLoadTimeoutMs: options.tabLoadTimeoutMs
     });
 
     if (!response?.ok) {
@@ -169,6 +194,7 @@ async function startNewProcessing() {
 
 async function continueRemaining() {
   const excludeEmails = parseExcludeList(excludeInput.value);
+  const options = getRunOptions();
   await saveSettings();
 
   activeRequestId = crypto.randomUUID();
@@ -180,7 +206,8 @@ async function continueRemaining() {
     const response = await chrome.runtime.sendMessage({
       type: 'PROCESS_REMAINING',
       requestId: activeRequestId,
-      excludeEmails
+      excludeEmails,
+      tabLoadTimeoutMs: options.tabLoadTimeoutMs
     });
 
     if (!response?.ok) {
@@ -205,6 +232,22 @@ async function continueRemaining() {
   }
 }
 
+async function stopProcessing() {
+  if (!activeRequestId) {
+    setStatus('No active run to stop.', 'error');
+    return;
+  }
+
+  setStatus('Stopping after current website...');
+  stopBtn.disabled = true;
+
+  try {
+    await chrome.runtime.sendMessage({ type: 'STOP_PROCESSING', requestId: activeRequestId });
+  } catch {
+    // ignore stop signal errors
+  }
+}
+
 async function clearListAndReset() {
   input.value = '';
   latestResults = [];
@@ -222,9 +265,16 @@ async function clearListAndReset() {
 
 processBtn.addEventListener('click', startNewProcessing);
 continueBtn.addEventListener('click', continueRemaining);
+stopBtn.addEventListener('click', stopProcessing);
 clearListBtn.addEventListener('click', clearListAndReset);
 
 excludeInput.addEventListener('blur', () => {
+  saveSettings().catch(() => {
+    // ignore settings save errors
+  });
+});
+
+timeoutInput.addEventListener('blur', () => {
   saveSettings().catch(() => {
     // ignore settings save errors
   });
@@ -246,6 +296,7 @@ copyBtn.addEventListener('click', async () => {
 
 (async () => {
   copyBtn.disabled = true;
+  setProcessingUi(false);
   await loadSettings();
   await loadLatestState();
 })();

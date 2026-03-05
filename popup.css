@@ -80,6 +80,15 @@ button {
   color: #1f2937;
 }
 
+.smallInput {
+  height: 36px;
+}
+
+#stopBtn {
+  background: #dc2626;
+  color: white;
+}
+
 button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
