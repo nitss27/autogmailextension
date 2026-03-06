@@ -14,6 +14,8 @@ const resumeEl = document.getElementById("resumeFile");
 const runBtn = document.getElementById("runBtn");
 const clearBtn = document.getElementById("clearBtn");
 const statusEl = document.getElementById("status");
+const sentListEl = document.getElementById("sentList");
+const copySentBtn = document.getElementById("copySentBtn");
 
 const SENT_VALUES = new Set(["yes", "true", "sent", "1", "done"]);
 const ATTACH_VALUES = new Set(["yes", "true", "attach", "1", "y"]);
@@ -22,6 +24,40 @@ const MAX_SENT_HISTORY = 3000;
 
 function setStatus(msg) {
   statusEl.textContent = msg;
+}
+
+function formatSentList(rows) {
+  if (!rows.length) return "";
+  return rows
+    .map((row) => {
+      const to = String(row.to || "").trim();
+      const subject = String(row.subject || "").trim();
+      return `${to}${subject ? ` | ${subject}` : ""}`;
+    })
+    .join("\n");
+}
+
+function setSentList(rows) {
+  sentListEl.value = formatSentList(rows);
+}
+
+async function copySentListToClipboard() {
+  const value = sentListEl.value || "";
+  if (!value.trim()) {
+    setStatus("Nothing to copy yet. Send emails first.");
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(value);
+    setStatus("Sent list copied to clipboard.");
+    return;
+  } catch (_) {
+    sentListEl.focus();
+    sentListEl.select();
+    const ok = document.execCommand("copy");
+    setStatus(ok ? "Sent list copied to clipboard." : "Copy failed. Please select and copy manually.");
+  }
 }
 
 function toggleMode() {
@@ -325,6 +361,7 @@ async function writeYesToSheetSentColumn(sheetSource, sentRows) {
 
 async function run() {
   setStatus("Preparing data...");
+  setSentList([]);
   const mode = modeEl.value;
   const sendLimit = Number(sendLimitEl.value) || null;
   const enableAttachment = enableAttachmentEl.checked;
@@ -430,6 +467,7 @@ async function run() {
   }
 
   const sentRows = response.sentRows || [];
+  setSentList(sentRows);
   await saveSentHistoryRows(sentRows);
 
   if (sourceInfo) {
@@ -466,7 +504,12 @@ clearBtn.addEventListener("click", async () => {
   sheetAttachRuleEl.checked = true;
   toggleMode();
   toggleAttachmentUi();
+  setSentList([]);
   setStatus("Saved settings cleared.");
+});
+
+copySentBtn.addEventListener("click", async () => {
+  await copySentListToClipboard();
 });
 
 runBtn.addEventListener("click", async () => {
@@ -492,4 +535,5 @@ runBtn.addEventListener("click", async () => {
   if (typeof data.savedSheetAttachRule === "boolean") sheetAttachRuleEl.checked = data.savedSheetAttachRule;
   toggleMode();
   toggleAttachmentUi();
+  setSentList([]);
 })();
