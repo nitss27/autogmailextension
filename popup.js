@@ -27,11 +27,8 @@ function setStatus(msg) {
 function formatSentList(rows) {
   if (!rows.length) return "";
   return rows
-    .map((row) => {
-      const to = String(row.to || "").trim();
-      const subject = String(row.subject || "").trim();
-      return `${to}${subject ? ` | ${subject}` : ""}`;
-    })
+    .map((row) => String(row.to || "").trim())
+    .filter(Boolean)
     .join("\n");
 }
 
