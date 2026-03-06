@@ -21,10 +21,11 @@ A Manifest V3 extension that automates Gmail compose and sends emails **one-by-o
 - Sheet status handling:
   - only uses sheet `sent` column to determine unsent rows,
   - after successful send, tries to write `YES` back to sheet `sent` column.
-- Extension-side sent detection:
-  - the extension stores sent email signatures (`to + subject + body`),
-  - future runs skip rows that were already sent by this extension, even if source data was not marked yet,
+- Sent results in popup:
   - popup shows a copyable list of successfully sent emails after each run.
+- Send decision source:
+  - emails are sent based on the data/source `sent` column status,
+  - rows continue to be treated as pending until `sent` is marked (for example `YES`).
 - Persistent saved settings:
   - last mode,
   - Google Sheet URL,

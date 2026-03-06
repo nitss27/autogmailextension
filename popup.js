@@ -19,8 +19,6 @@ const copySentBtn = document.getElementById("copySentBtn");
 
 const SENT_VALUES = new Set(["yes", "true", "sent", "1", "done"]);
 const ATTACH_VALUES = new Set(["yes", "true", "attach", "1", "y"]);
-const SENT_HISTORY_KEY = "sentHistorySignatures";
-const MAX_SENT_HISTORY = 3000;
 
 function setStatus(msg) {
   statusEl.textContent = msg;
@@ -264,42 +262,6 @@ async function setStorage(data) {
   return chrome.storage.local.set(data);
 }
 
-function normalizeForSignature(value) {
-  return String(value || "")
-    .trim()
-    .replace(/\s+/g, " ")
-    .toLowerCase();
-}
-
-function getRowSignature(row) {
-  return [normalizeForSignature(row.to), normalizeForSignature(row.subject), normalizeForSignature(row.body)].join("||");
-}
-
-async function getSentHistorySet() {
-  const data = await getStorage([SENT_HISTORY_KEY]);
-  const values = Array.isArray(data[SENT_HISTORY_KEY]) ? data[SENT_HISTORY_KEY] : [];
-  return new Set(values.filter(Boolean));
-}
-
-async function saveSentHistoryRows(rows) {
-  if (!rows.length) return;
-
-  const data = await getStorage([SENT_HISTORY_KEY]);
-  const existing = Array.isArray(data[SENT_HISTORY_KEY]) ? data[SENT_HISTORY_KEY] : [];
-  const next = [...existing];
-  const seen = new Set(existing);
-
-  for (const row of rows) {
-    const signature = getRowSignature(row);
-    if (!signature || seen.has(signature)) continue;
-    next.push(signature);
-    seen.add(signature);
-  }
-
-  const trimmed = next.length > MAX_SENT_HISTORY ? next.slice(next.length - MAX_SENT_HISTORY) : next;
-  await setStorage({ [SENT_HISTORY_KEY]: trimmed });
-}
-
 async function fileToDataUrl(file) {
   if (!file) return null;
   return new Promise((resolve, reject) => {
@@ -378,7 +340,6 @@ async function run() {
   let rows = [];
   const sheetUrl = sheetUrlEl.value.trim();
   let sourceInfo = null;
-  const sentHistorySet = await getSentHistorySet();
 
   if (mode === "single") {
     rows = [
@@ -416,18 +377,12 @@ async function run() {
   if (!rows.length) throw new Error("No rows found to send");
 
   let pending = rows.filter((row) => !row.sent);
-  let skippedByHistory = 0;
-  pending = pending.filter((row) => {
-    const alreadySentByExtension = sentHistorySet.has(getRowSignature(row));
-    if (alreadySentByExtension) skippedByHistory += 1;
-    return !alreadySentByExtension;
-  });
 
   if (sendLimit) pending = pending.slice(0, sendLimit);
 
   if (!pending.length) {
     throw new Error(
-      `Nothing to send (all ${rows.length} rows already marked sent in sheet/data or already sent by this extension).`
+      `Nothing to send (all ${rows.length} rows already marked sent in sheet/data).`
     );
   }
 
@@ -468,22 +423,17 @@ async function run() {
 
   const sentRows = response.sentRows || [];
   setSentList(sentRows);
-  await saveSentHistoryRows(sentRows);
 
   if (sourceInfo) {
     const writeback = await writeYesToSheetSentColumn(sourceInfo, sentRows);
     const base = `Done. Sent ${response.sentCount} email(s).`;
     const wb = writeback.updated ? ` Sheet writeback YES updated: ${writeback.updated}.` : "";
-    const tracked = sentRows.length ? ` Extension sent-history tracked: ${sentRows.length}.` : "";
-    const skipped = skippedByHistory ? ` Skipped by extension history: ${skippedByHistory}.` : "";
     const warn = writeback.warning ? ` Warning: ${writeback.warning}` : "";
-    setStatus(`${base}${wb}${tracked}${skipped}${warn}`);
+    setStatus(`${base}${wb}${warn}`);
     return;
   }
 
-  const tracked = sentRows.length ? ` Extension sent-history tracked: ${sentRows.length}.` : "";
-  const skipped = skippedByHistory ? ` Skipped by extension history: ${skippedByHistory}.` : "";
-  setStatus(`Done. Sent ${response.sentCount} email(s).${tracked}${skipped}`);
+  setStatus(`Done. Sent ${response.sentCount} email(s).`);
 }
 
 modeEl.addEventListener("change", toggleMode);
