@@ -8,6 +8,7 @@ const bodyEl = document.getElementById("body");
 const rowsEl = document.getElementById("rows");
 const sheetUrlEl = document.getElementById("sheetUrl");
 const sendLimitEl = document.getElementById("sendLimit");
+const sendSpeedSecEl = document.getElementById("sendSpeedSec");
 const enableAttachmentEl = document.getElementById("enableAttachment");
 const sheetAttachRuleEl = document.getElementById("sheetAttachRule");
 const resumeEl = document.getElementById("resumeFile");
@@ -323,12 +324,16 @@ async function run() {
   setSentList([]);
   const mode = modeEl.value;
   const sendLimit = Number(sendLimitEl.value) || null;
+  const sendSpeedSecRaw = Number(sendSpeedSecEl.value);
+  const sendSpeedSec = Number.isFinite(sendSpeedSecRaw) && sendSpeedSecRaw > 0 ? sendSpeedSecRaw : 0;
+  const sendIntervalMs = Math.round(sendSpeedSec * 1000);
   const enableAttachment = enableAttachmentEl.checked;
   const sheetAttachRule = sheetAttachRuleEl.checked;
 
   await setStorage({
     savedSheetUrl: sheetUrlEl.value.trim(),
     savedSendLimit: sendLimitEl.value.trim(),
+    savedSendSpeedSec: sendSpeedSecEl.value.trim(),
     savedMode: mode,
     savedEnableAttachment: enableAttachment,
     savedSheetAttachRule: sheetAttachRule
@@ -404,13 +409,15 @@ async function run() {
         : "sheet attach rule enabled but no attach column found (no rows will attach)"
       : "attachment enabled"
     : "attachment disabled";
-  setStatus(`Parsed ${rows.length} row(s). Sending ${pending.length} email(s)... (${attachInfo})`);
+  const speedInfo = sendIntervalMs > 0 ? `${sendSpeedSec}s/email` : "default fast mode";
+  setStatus(`Parsed ${rows.length} row(s). Sending ${pending.length} email(s)... (${attachInfo}, speed: ${speedInfo})`);
 
   const response = await chrome.tabs.sendMessage(tab.id, {
     type: "RUN_BATCH_SEND",
     payload: {
       rows: pending,
-      attachment: attachmentPayload
+      attachment: attachmentPayload,
+      sendIntervalMs
     }
   });
 
@@ -440,12 +447,14 @@ clearBtn.addEventListener("click", async () => {
   await setStorage({
     savedSheetUrl: "",
     savedSendLimit: "",
+    savedSendSpeedSec: "",
     savedMode: "single",
     savedEnableAttachment: true,
     savedSheetAttachRule: true
   });
   sheetUrlEl.value = "";
   sendLimitEl.value = "";
+  sendSpeedSecEl.value = "";
   modeEl.value = "single";
   enableAttachmentEl.checked = true;
   sheetAttachRuleEl.checked = true;
@@ -471,12 +480,14 @@ runBtn.addEventListener("click", async () => {
   const data = await getStorage([
     "savedSheetUrl",
     "savedSendLimit",
+    "savedSendSpeedSec",
     "savedMode",
     "savedEnableAttachment",
     "savedSheetAttachRule"
   ]);
   if (data.savedSheetUrl) sheetUrlEl.value = data.savedSheetUrl;
   if (data.savedSendLimit) sendLimitEl.value = data.savedSendLimit;
+  if (data.savedSendSpeedSec) sendSpeedSecEl.value = data.savedSendSpeedSec;
   if (data.savedMode) modeEl.value = data.savedMode;
   if (typeof data.savedEnableAttachment === "boolean") enableAttachmentEl.checked = data.savedEnableAttachment;
   if (typeof data.savedSheetAttachRule === "boolean") sheetAttachRuleEl.checked = data.savedSheetAttachRule;

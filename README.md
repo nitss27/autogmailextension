@@ -11,10 +11,11 @@ A Manifest V3 extension that automates Gmail compose and sends emails **one-by-o
   - Single email form.
   - Pasted CSV/TSV rows with headers: `to,subject,body[,sent,attach]`.
   - Google Sheet URL (public CSV export, **no OAuth**).
-- Rich body formatting support:
+- Rich body formatting + variation support:
   - raw HTML from sheet/body is preserved if provided,
   - plus `**bold**`, `__underline__`, and `- bullet items` for plain text,
-  - preserves multi-line body text from quoted CSV cells (line breaks kept).
+  - preserves multi-line body text from quoted CSV cells (line breaks kept),
+  - supports random pipe-variation tokens in subject/body (example: `generate|make|get|find`) where one option is chosen per send.
 - Attachment options:
   - global toggle to send without attachment,
   - in sheet mode, optional row-level attachment rule from `attach` column (`yes/true/1`).
@@ -30,6 +31,7 @@ A Manifest V3 extension that automates Gmail compose and sends emails **one-by-o
   - last mode,
   - Google Sheet URL,
   - send limit per run,
+  - send speed (seconds per email),
   - attachment toggles.
 
 ## How to use
