@@ -8,18 +8,52 @@ const bodyEl = document.getElementById("body");
 const rowsEl = document.getElementById("rows");
 const sheetUrlEl = document.getElementById("sheetUrl");
 const sendLimitEl = document.getElementById("sendLimit");
+const sendSpeedSecEl = document.getElementById("sendSpeedSec");
 const enableAttachmentEl = document.getElementById("enableAttachment");
 const sheetAttachRuleEl = document.getElementById("sheetAttachRule");
 const resumeEl = document.getElementById("resumeFile");
 const runBtn = document.getElementById("runBtn");
 const clearBtn = document.getElementById("clearBtn");
 const statusEl = document.getElementById("status");
+const sentListEl = document.getElementById("sentList");
+const copySentBtn = document.getElementById("copySentBtn");
 
 const SENT_VALUES = new Set(["yes", "true", "sent", "1", "done"]);
 const ATTACH_VALUES = new Set(["yes", "true", "attach", "1", "y"]);
 
 function setStatus(msg) {
   statusEl.textContent = msg;
+}
+
+function formatSentList(rows) {
+  if (!rows.length) return "";
+  return rows
+    .map((row) => String(row.to || "").trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+function setSentList(rows) {
+  sentListEl.value = formatSentList(rows);
+}
+
+async function copySentListToClipboard() {
+  const value = sentListEl.value || "";
+  if (!value.trim()) {
+    setStatus("Nothing to copy yet. Send emails first.");
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(value);
+    setStatus("Sent list copied to clipboard.");
+    return;
+  } catch (_) {
+    sentListEl.focus();
+    sentListEl.select();
+    const ok = document.execCommand("copy");
+    setStatus(ok ? "Sent list copied to clipboard." : "Copy failed. Please select and copy manually.");
+  }
 }
 
 function toggleMode() {
@@ -287,14 +321,19 @@ async function writeYesToSheetSentColumn(sheetSource, sentRows) {
 
 async function run() {
   setStatus("Preparing data...");
+  setSentList([]);
   const mode = modeEl.value;
   const sendLimit = Number(sendLimitEl.value) || null;
+  const sendSpeedSecRaw = Number(sendSpeedSecEl.value);
+  const sendSpeedSec = Number.isFinite(sendSpeedSecRaw) && sendSpeedSecRaw > 0 ? sendSpeedSecRaw : 0;
+  const sendIntervalMs = Math.round(sendSpeedSec * 1000);
   const enableAttachment = enableAttachmentEl.checked;
   const sheetAttachRule = sheetAttachRuleEl.checked;
 
   await setStorage({
     savedSheetUrl: sheetUrlEl.value.trim(),
     savedSendLimit: sendLimitEl.value.trim(),
+    savedSendSpeedSec: sendSpeedSecEl.value.trim(),
     savedMode: mode,
     savedEnableAttachment: enableAttachment,
     savedSheetAttachRule: sheetAttachRule
@@ -340,10 +379,13 @@ async function run() {
   if (!rows.length) throw new Error("No rows found to send");
 
   let pending = rows.filter((row) => !row.sent);
+
   if (sendLimit) pending = pending.slice(0, sendLimit);
 
   if (!pending.length) {
-    throw new Error(`Nothing to send (all ${rows.length} rows already marked sent in sheet/data).`);
+    throw new Error(
+      `Nothing to send (all ${rows.length} rows already marked sent in sheet/data).`
+    );
   }
 
   const needsAttachment = pending.some((row) => row.shouldAttach);
@@ -367,13 +409,15 @@ async function run() {
         : "sheet attach rule enabled but no attach column found (no rows will attach)"
       : "attachment enabled"
     : "attachment disabled";
-  setStatus(`Parsed ${rows.length} row(s). Sending ${pending.length} email(s)... (${attachInfo})`);
+  const speedInfo = sendIntervalMs > 0 ? `${sendSpeedSec}s/email` : "default fast mode";
+  setStatus(`Parsed ${rows.length} row(s). Sending ${pending.length} email(s)... (${attachInfo}, speed: ${speedInfo})`);
 
   const response = await chrome.tabs.sendMessage(tab.id, {
     type: "RUN_BATCH_SEND",
     payload: {
       rows: pending,
-      attachment: attachmentPayload
+      attachment: attachmentPayload,
+      sendIntervalMs
     }
   });
 
@@ -381,8 +425,11 @@ async function run() {
     throw new Error(response?.error || "Send failed");
   }
 
+  const sentRows = response.sentRows || [];
+  setSentList(sentRows);
+
   if (sourceInfo) {
-    const writeback = await writeYesToSheetSentColumn(sourceInfo, response.sentRows || []);
+    const writeback = await writeYesToSheetSentColumn(sourceInfo, sentRows);
     const base = `Done. Sent ${response.sentCount} email(s).`;
     const wb = writeback.updated ? ` Sheet writeback YES updated: ${writeback.updated}.` : "";
     const warn = writeback.warning ? ` Warning: ${writeback.warning}` : "";
@@ -400,18 +447,25 @@ clearBtn.addEventListener("click", async () => {
   await setStorage({
     savedSheetUrl: "",
     savedSendLimit: "",
+    savedSendSpeedSec: "",
     savedMode: "single",
     savedEnableAttachment: true,
     savedSheetAttachRule: true
   });
   sheetUrlEl.value = "";
   sendLimitEl.value = "";
+  sendSpeedSecEl.value = "";
   modeEl.value = "single";
   enableAttachmentEl.checked = true;
   sheetAttachRuleEl.checked = true;
   toggleMode();
   toggleAttachmentUi();
+  setSentList([]);
   setStatus("Saved settings cleared.");
+});
+
+copySentBtn.addEventListener("click", async () => {
+  await copySentListToClipboard();
 });
 
 runBtn.addEventListener("click", async () => {
@@ -426,15 +480,18 @@ runBtn.addEventListener("click", async () => {
   const data = await getStorage([
     "savedSheetUrl",
     "savedSendLimit",
+    "savedSendSpeedSec",
     "savedMode",
     "savedEnableAttachment",
     "savedSheetAttachRule"
   ]);
   if (data.savedSheetUrl) sheetUrlEl.value = data.savedSheetUrl;
   if (data.savedSendLimit) sendLimitEl.value = data.savedSendLimit;
+  if (data.savedSendSpeedSec) sendSpeedSecEl.value = data.savedSendSpeedSec;
   if (data.savedMode) modeEl.value = data.savedMode;
   if (typeof data.savedEnableAttachment === "boolean") enableAttachmentEl.checked = data.savedEnableAttachment;
   if (typeof data.savedSheetAttachRule === "boolean") sheetAttachRuleEl.checked = data.savedSheetAttachRule;
   toggleMode();
   toggleAttachmentUi();
+  setSentList([]);
 })();

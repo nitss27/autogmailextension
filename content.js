@@ -130,6 +130,31 @@ function formatBodyToHtml(text) {
   return output.join("");
 }
 
+function pickRandomOption(options) {
+  return options[Math.floor(Math.random() * options.length)];
+}
+
+function applyPipeVariations(text) {
+  const input = String(text || "");
+  if (!input.includes("|")) return input;
+
+  const parts = input.split(/(\s+)/);
+  return parts
+    .map((part) => {
+      if (!part || /^\s+$/.test(part) || !part.includes("|")) return part;
+
+      const match = part.match(/^([^\w|]*)([^\s|]+(?:\|[^\s|]+)+)([^\w|]*)$/);
+      if (!match) return part;
+
+      const [, prefix, core, suffix] = match;
+      const options = core.split("|").map((v) => v.trim()).filter(Boolean);
+      if (options.length < 2) return part;
+
+      return `${prefix}${pickRandomOption(options)}${suffix}`;
+    })
+    .join("");
+}
+
 function dataUrlToFile(dataUrl, fileName, mimeType) {
   const [meta, base64] = dataUrl.split(",");
   const mime = mimeType || meta.match(/data:(.*?);base64/)?.[1] || "application/octet-stream";
@@ -244,6 +269,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
     const rows = message.payload?.rows || [];
     const attachment = message.payload?.attachment;
+    const sendIntervalMs = Math.max(0, Number(message.payload?.sendIntervalMs) || 0);
 
     if (!rows.length) {
       throw new Error("Missing rows");
@@ -254,9 +280,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     const sentRows = [];
+    let previousSendStartedAt = 0;
+
     for (const row of rows) {
-      await sendSingle(row, attachment);
-      sentRows.push(row);
+      if (previousSendStartedAt && sendIntervalMs > 0) {
+        const elapsed = Date.now() - previousSendStartedAt;
+        if (elapsed < sendIntervalMs) {
+          await sleep(sendIntervalMs - elapsed);
+        }
+      }
+
+      previousSendStartedAt = Date.now();
+      const resolvedRow = {
+        ...row,
+        subject: applyPipeVariations(row.subject),
+        body: applyPipeVariations(row.body)
+      };
+
+      await sendSingle(resolvedRow, attachment);
+      sentRows.push(resolvedRow);
       await sleep(80);
     }
 
