@@ -1,20 +1,20 @@
 {
   "manifest_version": 3,
-  "name": "Gmail Auto Sender",
-  "version": "1.0.0",
-  "description": "Send Gmail messages one-by-one from form, pasted rows, or a Google Sheet CSV without OAuth.",
+  "name": "Form Capture + ChatGPT Autofill",
+  "version": "2.0.0",
+  "description": "Capture current page source and required fields, send to ChatGPT, then autofill form fields from returned mappings.",
   "permissions": ["activeTab", "scripting", "storage", "tabs"],
-  "host_permissions": ["https://mail.google.com/*", "https://docs.google.com/*"],
+  "host_permissions": ["https://chatgpt.com/*", "<all_urls>"],
   "background": {
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "Gmail Auto Sender",
+    "default_title": "Form Capture + ChatGPT Autofill",
     "default_popup": "popup.html"
   },
   "content_scripts": [
     {
-      "matches": ["https://mail.google.com/*"],
+      "matches": ["<all_urls>"],
       "js": ["content.js"],
       "run_at": "document_idle"
     }
