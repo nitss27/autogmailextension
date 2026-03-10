@@ -33,6 +33,8 @@ function serializeFields(includeAllFields = false) {
   const fields = Array.from(document.querySelectorAll("input, textarea, select")).filter((el) => {
     const type = (el.getAttribute("type") || "").toLowerCase();
     if (["hidden", "submit", "button", "image", "reset", "file"].includes(type)) return false;
+    if (el.disabled) return false;
+    if ((el.tagName === "INPUT" || el.tagName === "TEXTAREA") && el.readOnly) return false;
     return includeAllFields || el.required || el.getAttribute("aria-required") === "true";
   });
 
@@ -475,6 +477,23 @@ function createManualControlPanel() {
   btnFill.textContent = "2) Fill From ChatGPT Output";
   btnFill.style.width = "100%";
 
+  const allFieldsWrap = document.createElement("label");
+  allFieldsWrap.style.display = "flex";
+  allFieldsWrap.style.alignItems = "center";
+  allFieldsWrap.style.gap = "6px";
+  allFieldsWrap.style.fontSize = "11px";
+  allFieldsWrap.style.marginBottom = "6px";
+
+  const allFieldsCheckbox = document.createElement("input");
+  allFieldsCheckbox.type = "checkbox";
+  allFieldsCheckbox.checked = true;
+
+  const allFieldsText = document.createElement("span");
+  allFieldsText.textContent = "Capture all fields";
+
+  allFieldsWrap.appendChild(allFieldsCheckbox);
+  allFieldsWrap.appendChild(allFieldsText);
+
   [btnStart, btnFill].forEach((btn) => {
     btn.style.border = "0";
     btn.style.borderRadius = "6px";
@@ -515,9 +534,12 @@ function createManualControlPanel() {
     }
   }
 
-  btnStart.addEventListener("click", () => runAction({ type: "MANUAL_CAPTURE_AND_SEND" }, btnStart));
+  btnStart.addEventListener("click", () =>
+    runAction({ type: "MANUAL_CAPTURE_AND_SEND", includeAllFields: allFieldsCheckbox.checked }, btnStart)
+  );
   btnFill.addEventListener("click", () => runAction({ type: "MANUAL_FILL_FROM_CHATGPT" }, btnFill));
 
+  panel.appendChild(allFieldsWrap);
   panel.appendChild(btnStart);
   panel.appendChild(btnFill);
   panel.appendChild(status);

@@ -59,3 +59,5 @@ The extension also tries to parse table responses where first column is XPath an
 6. Click **Fill Current Form from Pasted Output**.
 
 You can also enable **Capture all inputs/selects/textareas** if you want every field (not only required fields).
+
+- Capture-all mode includes input/select/textarea fields while skipping non-fillable helper inputs (disabled/readonly/hidden type).

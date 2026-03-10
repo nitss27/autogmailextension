@@ -199,7 +199,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message?.type === "MANUAL_CAPTURE_AND_SEND") {
       const sourceTabId = sender?.tab?.id;
       if (!sourceTabId) throw new Error("Source tab not found.");
-      const result = await runCaptureAndPromptFlow({ sourceTabId, maxHtmlChars: Number(message.maxHtmlChars || 120000) });
+      const result = await runCaptureAndPromptFlow({
+        sourceTabId,
+        maxHtmlChars: Number(message.maxHtmlChars || 120000),
+        includeAllFields: Boolean(message.includeAllFields)
+      });
       sendResponse(result);
       return;
     }

@@ -36,7 +36,7 @@ async function loadSettings() {
   chatUrlEl.value = saved.chatUrl || DEFAULT_CHAT_URL;
   formUrlsEl.value = saved.formUrls || "";
   autoSubmitEl.checked = Boolean(saved.autoSubmit);
-  includeAllFieldsEl.checked = Boolean(saved.includeAllFields);
+  includeAllFieldsEl.checked = saved.includeAllFields === undefined ? true : Boolean(saved.includeAllFields);
   promptTextEl.value = saved.promptText || "";
   mappingTextEl.value = saved.mappingText || "";
 }
