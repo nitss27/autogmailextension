@@ -40,3 +40,10 @@ The extension also tries to parse table responses where first column is XPath an
 - Some forms include captcha/OTP/manual checks that cannot be bypassed automatically.
 
 - ChatGPT tab must already be open; this extension will not create a new ChatGPT tab automatically.
+
+## On-page manual buttons
+
+- Every page now shows a small **AI Form Helper** panel in the bottom-right corner.
+- Use **1) Capture + Ask ChatGPT** to send required field metadata from current form page.
+- Use **2) Fill From ChatGPT Output** to read latest ChatGPT TSV output and fill the current page.
+- On ChatGPT pages, these buttons are shown but disabled.

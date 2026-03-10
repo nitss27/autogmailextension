@@ -390,3 +390,97 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   return true;
 });
+
+
+function createManualControlPanel() {
+  if (window.__aiFormButtonsInitialized) return;
+  window.__aiFormButtonsInitialized = true;
+
+  const isChatTab = /(^|\.)chatgpt\.com$/i.test(location.hostname);
+
+  const panel = document.createElement("div");
+  panel.id = "ai-form-helper-panel";
+  panel.style.position = "fixed";
+  panel.style.right = "14px";
+  panel.style.bottom = "14px";
+  panel.style.zIndex = "2147483647";
+  panel.style.background = "#111827";
+  panel.style.color = "#fff";
+  panel.style.padding = "10px";
+  panel.style.borderRadius = "10px";
+  panel.style.fontFamily = "Arial, sans-serif";
+  panel.style.boxShadow = "0 4px 14px rgba(0,0,0,0.25)";
+  panel.style.minWidth = "220px";
+
+  const title = document.createElement("div");
+  title.textContent = "AI Form Helper";
+  title.style.fontSize = "12px";
+  title.style.fontWeight = "700";
+  title.style.marginBottom = "8px";
+  panel.appendChild(title);
+
+  const btnStart = document.createElement("button");
+  btnStart.type = "button";
+  btnStart.textContent = "1) Capture + Ask ChatGPT";
+  btnStart.style.width = "100%";
+  btnStart.style.marginBottom = "6px";
+
+  const btnFill = document.createElement("button");
+  btnFill.type = "button";
+  btnFill.textContent = "2) Fill From ChatGPT Output";
+  btnFill.style.width = "100%";
+
+  [btnStart, btnFill].forEach((btn) => {
+    btn.style.border = "0";
+    btn.style.borderRadius = "6px";
+    btn.style.padding = "8px";
+    btn.style.cursor = "pointer";
+    btn.style.fontSize = "12px";
+  });
+
+  if (isChatTab) {
+    btnStart.disabled = true;
+    btnFill.disabled = true;
+    btnStart.style.opacity = "0.6";
+    btnFill.style.opacity = "0.6";
+  }
+
+  const status = document.createElement("div");
+  status.style.fontSize = "11px";
+  status.style.marginTop = "8px";
+  status.style.opacity = "0.95";
+  status.textContent = isChatTab
+    ? "Open a form page to use these buttons."
+    : "Use step 1, then step 2.";
+
+  async function runAction(action, button) {
+    try {
+      button.disabled = true;
+      status.textContent = "Processing...";
+      const resp = await chrome.runtime.sendMessage(action);
+      if (!resp?.ok) throw new Error(resp?.error || resp?.message || "Action failed");
+      status.textContent = resp.message || "Done.";
+    } catch (error) {
+      status.textContent = `Error: ${error.message || String(error)}`;
+    } finally {
+      if (!isChatTab) {
+        btnStart.disabled = false;
+        btnFill.disabled = false;
+      }
+    }
+  }
+
+  btnStart.addEventListener("click", () => runAction({ type: "MANUAL_CAPTURE_AND_SEND" }, btnStart));
+  btnFill.addEventListener("click", () => runAction({ type: "MANUAL_FILL_FROM_CHATGPT" }, btnFill));
+
+  panel.appendChild(btnStart);
+  panel.appendChild(btnFill);
+  panel.appendChild(status);
+  document.documentElement.appendChild(panel);
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", createManualControlPanel, { once: true });
+} else {
+  createManualControlPanel();
+}
