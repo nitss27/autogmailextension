@@ -1,8 +1,8 @@
 const chatUrlEl = document.getElementById("chatUrl");
+const formUrlsEl = document.getElementById("formUrls");
 const maxCharsEl = document.getElementById("maxChars");
-const mappingTextEl = document.getElementById("mappingText");
-const captureSendBtn = document.getElementById("captureSendBtn");
-const fillBtn = document.getElementById("fillBtn");
+const autoSubmitEl = document.getElementById("autoSubmit");
+const runBtn = document.getElementById("runBtn");
 const statusEl = document.getElementById("status");
 
 const DEFAULT_CHAT_URL = "https://chatgpt.com/c/69afa3d3-0fac-8321-9c3f-9fbdd9be6715";
@@ -11,54 +11,56 @@ function setStatus(msg) {
   statusEl.textContent = msg;
 }
 
+function parseUrls(input) {
+  return String(input || "")
+    .split(/\r?\n/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
 async function loadSettings() {
-  const saved = await chrome.storage.local.get(["chatUrl", "maxChars", "mappingText"]);
+  const saved = await chrome.storage.local.get(["chatUrl", "formUrls", "maxChars", "autoSubmit"]);
   chatUrlEl.value = saved.chatUrl || DEFAULT_CHAT_URL;
+  formUrlsEl.value = saved.formUrls || "";
   maxCharsEl.value = String(saved.maxChars || 120000);
-  mappingTextEl.value = saved.mappingText || "";
+  autoSubmitEl.checked = Boolean(saved.autoSubmit);
 }
 
 async function saveSettings() {
   await chrome.storage.local.set({
     chatUrl: chatUrlEl.value.trim() || DEFAULT_CHAT_URL,
+    formUrls: formUrlsEl.value,
     maxChars: Number(maxCharsEl.value || 120000),
-    mappingText: mappingTextEl.value
+    autoSubmit: autoSubmitEl.checked
   });
 }
 
-captureSendBtn.addEventListener("click", async () => {
+runBtn.addEventListener("click", async () => {
   try {
-    setStatus("Capturing form HTML and required fields...");
     await saveSettings();
+    const formUrls = parseUrls(formUrlsEl.value);
+    if (!formUrls.length) throw new Error("Please enter at least one form URL.");
+
+    setStatus(`Starting automation for ${formUrls.length} form(s)...`);
 
     const resp = await chrome.runtime.sendMessage({
-      type: "CAPTURE_AND_SEND",
+      type: "AUTOMATE_FORM_LINKS",
       chatUrl: chatUrlEl.value.trim() || DEFAULT_CHAT_URL,
-      maxHtmlChars: Number(maxCharsEl.value || 120000)
+      formUrls,
+      maxHtmlChars: Number(maxCharsEl.value || 120000),
+      autoSubmit: autoSubmitEl.checked
     });
 
-    if (!resp?.ok) throw new Error(resp?.error || "Unknown error");
-    setStatus(`Sent to ChatGPT. Required fields found: ${resp.fieldCount}. URL: ${resp.sourceUrl}`);
-  } catch (error) {
-    setStatus(`Error: ${error.message || String(error)}`);
-  }
-});
+    if (!resp?.ok) throw new Error(resp?.error || "Automation failed");
 
-fillBtn.addEventListener("click", async () => {
-  try {
-    const mappingText = mappingTextEl.value.trim();
-    if (!mappingText) throw new Error("Please paste ChatGPT TSV output first.");
-
-    await saveSettings();
-    setStatus("Filling current form tab...");
-
-    const resp = await chrome.runtime.sendMessage({
-      type: "FILL_CURRENT_TAB",
-      mappingText
-    });
-
-    if (!resp?.ok) throw new Error(resp?.error || "Unknown error");
-    setStatus(`Filled ${resp.result.filled}/${resp.result.total} mapped fields.`);
+    const lines = [
+      `Done. Total: ${resp.summary.total}`,
+      `Filled: ${resp.summary.filled}`,
+      `Failed: ${resp.summary.failed}`,
+      "",
+      ...resp.summary.items.map((item) => `${item.ok ? "✅" : "❌"} ${item.url} - ${item.message}`)
+    ];
+    setStatus(lines.join("\n"));
   } catch (error) {
     setStatus(`Error: ${error.message || String(error)}`);
   }

@@ -1,35 +1,38 @@
-# Form Capture + ChatGPT Autofill (Chrome Extension)
+# AI Form Auto Filler (Chrome Extension)
 
-This extension automates your workflow:
+This extension automates a full workflow for job/application forms:
 
-1. Capture current page source + required form fields.
-2. Open/focus your ChatGPT conversation tab.
-3. Paste and send a generated prompt to ChatGPT.
-4. Paste ChatGPT TSV output back into the popup.
-5. Fill the original form fields using XPath mappings.
+1. You paste one or many form links.
+2. Extension opens each form and captures required fields + page source.
+3. Extension switches to your ChatGPT conversation and submits a prompt automatically.
+4. It waits for ChatGPT response, extracts `xpath\tvalue` mappings.
+5. It returns to the form tab and fills fields automatically (optionally submits form).
 
 ## How to use
 
 1. Open `chrome://extensions`.
 2. Enable **Developer mode**.
-3. Click **Load unpacked** and select this folder.
-4. Open the target form page in a tab.
-5. Open extension popup.
-6. Keep ChatGPT URL as default (or change it).
-7. Click **Capture + Send to ChatGPT**.
-8. In ChatGPT response, copy TSV rows in format:
+3. Click **Load unpacked** and choose this folder.
+4. Open extension popup.
+5. Keep/set ChatGPT conversation URL.
+6. Paste form URLs (one per line).
+7. (Optional) enable **Auto submit after filling**.
+8. Click **Run Full Automation**.
 
-   ```
-   xpath\tvalue
-   //*[@id="firstName"]\tJohn
-   //*[@id="lastName"]\tDoe
-   ```
+## ChatGPT response format expected
 
-9. Go back to form tab, paste TSV in popup, click **Fill Current Form Tab**.
+Best output is TSV:
+
+```text
+xpath\tvalue
+//*[@id="firstName"]\tJohn
+//*[@id="lastName"]\tDoe
+```
+
+The extension also tries to parse table responses where first column is XPath and second column is value.
 
 ## Notes
 
-- The extension captures only up to `Max HTML chars` (default 120000).
-- Required fields are detected using `required` / `aria-required="true"`.
-- XPath-first fill strategy is used. If a field is not found, it is skipped.
-- You can adjust ChatGPT prompt behavior inside `content.js` (`buildPrompt` function).
+- Required fields are detected with `required` / `aria-required="true"`.
+- For `<select>`, available options are included in prompt to improve matching.
+- Some forms include captcha/OTP/manual checks that cannot be bypassed automatically.

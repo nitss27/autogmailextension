@@ -2,29 +2,30 @@
 <html>
   <head>
     <meta charset="UTF-8" />
-    <title>Form Capture + ChatGPT Autofill</title>
+    <title>AI Form Auto Filler</title>
     <link rel="stylesheet" href="popup.css" />
   </head>
   <body>
     <main>
-      <h1>Form Capture + ChatGPT Autofill</h1>
-      <p class="hint">1) Open form tab. 2) Capture + send to ChatGPT. 3) Paste ChatGPT TSV output and fill form.</p>
+      <h1>AI Form Auto Filler</h1>
+      <p class="hint">Provide form links, then the extension will capture required fields, ask ChatGPT for values, and fill each form automatically.</p>
 
-      <label for="chatUrl">ChatGPT tab URL</label>
+      <label for="chatUrl">ChatGPT conversation URL</label>
       <input id="chatUrl" type="url" />
 
-      <label for="maxChars">Max HTML chars to send</label>
+      <label for="formUrls">Form links (one URL per line)</label>
+      <textarea id="formUrls" rows="6" placeholder="https://example.com/form-1\nhttps://example.com/form-2"></textarea>
+
+      <label for="maxChars">Max page source chars</label>
       <input id="maxChars" type="number" min="20000" step="10000" value="120000" />
 
-      <div class="actions">
-        <button id="captureSendBtn">Capture + Send to ChatGPT</button>
-      </div>
-
-      <label for="mappingText">Paste ChatGPT TSV output (xpath[TAB]value)</label>
-      <textarea id="mappingText" rows="8" placeholder="xpath\tvalue"></textarea>
+      <label class="check">
+        <input id="autoSubmit" type="checkbox" />
+        Auto submit after filling (only if submit button is found)
+      </label>
 
       <div class="actions">
-        <button id="fillBtn">Fill Current Form Tab</button>
+        <button id="runBtn">Run Full Automation</button>
       </div>
 
       <pre id="status"></pre>
