@@ -141,6 +141,41 @@ function getStopButton() {
   return document.querySelector('button[aria-label="Stop streaming"], button[data-testid="stop-button"]');
 }
 
+
+async function waitForChatEditor(timeoutMs = 30000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const editor = getChatEditor();
+    if (editor) return editor;
+    await sleep(300);
+  }
+  return null;
+}
+
+function isSubmitReady(button) {
+  if (!button) return false;
+  if (button.disabled) return false;
+  if (button.getAttribute("aria-disabled") === "true") return false;
+  if (button.getAttribute("data-testid") === "stop-button") return false;
+  if ((button.getAttribute("aria-label") || "").toLowerCase().includes("stop streaming")) return false;
+  return true;
+}
+
+async function waitForSendButtonReady(timeoutMs = 20000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (getStopButton()) {
+      await sleep(500);
+      continue;
+    }
+
+    const button = getChatSubmitButton();
+    if (isSubmitReady(button)) return button;
+    await sleep(250);
+  }
+  return null;
+}
+
 function setEditorText(editor, text) {
   editor.focus();
   const value = String(text || "");
@@ -253,19 +288,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     }
 
     if (message?.type === "CHATGPT_SEND_AND_WAIT") {
-      const editor = getChatEditor();
+      const editor = await waitForChatEditor(30000);
       if (!editor) throw new Error("ChatGPT input box not found.");
 
       setEditorText(editor, message.promptText || "");
+      await sleep(250);
 
-      let submit = null;
-      for (let i = 0; i < 12; i += 1) {
-        submit = getChatSubmitButton();
-        if (submit && !submit.disabled && submit.getAttribute("aria-disabled") !== "true") break;
-        await sleep(300);
-      }
-
-      if (!submit) throw new Error("ChatGPT send button not found.");
+      const submit = await waitForSendButtonReady(25000);
+      if (!submit) throw new Error("ChatGPT send button not ready.");
       submit.click();
 
       const done = await waitUntilNotStreaming(Number(message.timeoutMs || 120000));
