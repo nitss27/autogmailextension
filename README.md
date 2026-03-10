@@ -35,6 +35,8 @@ The extension also tries to parse table responses where first column is XPath an
 
 - Required fields are detected with `required` / `aria-required="true"`.
 - For `<select>`, available options are included in prompt to improve matching.
+- Only compact field metadata (xpath/name/label/options) is sent to ChatGPT; full page HTML is not sent.
+- The extension can parse TSV from code blocks, markdown tables, or plain text response lines.
 - Some forms include captcha/OTP/manual checks that cannot be bypassed automatically.
 
 - ChatGPT tab must already be open; this extension will not create a new ChatGPT tab automatically.

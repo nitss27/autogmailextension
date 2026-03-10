@@ -53,26 +53,33 @@ function serializeRequiredFields() {
   }));
 }
 
-function buildPrompt(pageSource, requiredFields, url) {
+function buildPrompt(requiredFields, url) {
+  const compactFields = requiredFields.map((field) => ({
+    xpath: field.xpath,
+    name: field.name,
+    id: field.id,
+    label: field.label,
+    tag: field.tag,
+    type: field.type,
+    options: field.options
+  }));
+
   return [
-    "Fill this web form using realistic sample candidate data.",
+    "Fill this form using realistic candidate values.",
     `Form URL: ${url}`,
     "",
-    "Return ONLY TSV with this exact header:",
-    "xpath\tvalue",
+    "Return ONLY plain TSV with exact header:",
+    "xpath	value",
     "",
     "Rules:",
-    "1) Include one row for every required field.",
+    "1) Include one row for each field below.",
     "2) Keep xpath exactly unchanged.",
-    "3) For dropdowns, use one of provided options.",
-    "4) Use valid formats for email/phone/date.",
-    "5) Do not include explanations or markdown.",
+    "3) For selects, choose only from provided options.",
+    "4) Do not return markdown, mailto links, or explanations.",
+    "5) If unsure, return a safe placeholder value.",
     "",
-    "Required fields:",
-    JSON.stringify(requiredFields, null, 2),
-    "",
-    "Page source (trimmed):",
-    pageSource
+    "Field metadata:",
+    JSON.stringify(compactFields, null, 2)
   ].join("\n");
 }
 
@@ -105,8 +112,33 @@ function fillField(el, value) {
   el.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
+function normalizeMappingText(text) {
+  let out = String(text || "").trim();
+  if (!out) return "";
+  out = out.replace(/\r\n/g, "\n");
+  if (out.includes("\\n")) out = out.replace(/\\n/g, "\n");
+  return out;
+}
+
+function cleanValue(value) {
+  let out = String(value || "").trim();
+  const markdownLink = out.match(/^\[(.*?)\]\((.*?)\)$/);
+  if (markdownLink) {
+    const label = markdownLink[1] || "";
+    const href = markdownLink[2] || "";
+    if (/^mailto:/i.test(href)) {
+      out = href.replace(/^mailto:/i, "").trim() || label.trim();
+    } else {
+      out = label.trim() || href.trim();
+    }
+  }
+  out = out.replace(/^['"]|['"]$/g, "");
+  return out;
+}
+
 function parseMappingText(mappingText) {
-  const lines = String(mappingText || "")
+  const normalized = normalizeMappingText(mappingText);
+  const lines = normalized
     .split(/\r?\n/)
     .map((l) => l.trim())
     .filter(Boolean);
@@ -116,7 +148,7 @@ function parseMappingText(mappingText) {
     if (/^xpath\tvalue$/i.test(line)) continue;
     const [xpath, ...rest] = line.split("\t");
     if (!xpath || !rest.length) continue;
-    rows.push({ xpath: xpath.trim(), value: rest.join("\t").trim() });
+    rows.push({ xpath: xpath.trim(), value: cleanValue(rest.join("\t")) });
   }
   return rows;
 }
@@ -262,6 +294,23 @@ function parseAssistantCodeBlockTsv() {
   return "";
 }
 
+function parseAssistantPlainTextTsv() {
+  const articles = Array.from(document.querySelectorAll("article"));
+  const latest = articles[articles.length - 1];
+  const text = normalizeMappingText(latest ? latest.innerText : document.body.innerText);
+  if (!text) return "";
+
+  const lines = text
+    .split(/\r?\n/)
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .filter((x) => x.includes("\t") && (x.startsWith("/") || x.startsWith("//*[@") || /^xpath\tvalue$/i.test(x)));
+
+  if (!lines.length) return "";
+  if (!/^xpath\tvalue$/i.test(lines[0])) lines.unshift("xpath\tvalue");
+  return lines.join("\n");
+}
+
 function maybeSubmitForm() {
   const submit =
     document.querySelector("button[type='submit']") ||
@@ -277,12 +326,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   (async () => {
     if (message?.type === "CAPTURE_REQUIRED_FIELDS") {
       const requiredFields = serializeRequiredFields();
-      const maxChars = Number(message.maxHtmlChars || 120000);
-      const pageSource = document.documentElement.outerHTML.slice(0, maxChars);
       sendResponse({
         url: location.href,
         requiredFields,
-        prompt: buildPrompt(pageSource, requiredFields, location.href)
+        prompt: buildPrompt(requiredFields, location.href)
       });
       return;
     }
@@ -308,7 +355,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type === "CHATGPT_EXTRACT_MAPPINGS") {
       const codeTsv = parseAssistantCodeBlockTsv();
       const tableTsv = codeTsv ? "" : parseAssistantTablesToTsv();
-      const mappingText = codeTsv || tableTsv;
+      const plainTsv = codeTsv || tableTsv ? "" : parseAssistantPlainTextTsv();
+      const mappingText = codeTsv || tableTsv || plainTsv;
       sendResponse({ ok: true, mappingText });
       return;
     }
