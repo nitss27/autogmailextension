@@ -8,25 +8,51 @@
   <body>
     <main>
       <h1>AI Form Auto Filler</h1>
-      <p class="hint">Provide form links, then the extension will use your already-open ChatGPT tab to generate values and fill each form automatically.</p>
 
-      <label for="chatUrl">ChatGPT conversation URL</label>
-      <input id="chatUrl" type="url" />
+      <section class="card">
+        <h2>Manual Mode (recommended)</h2>
+        <p class="hint">1) Capture inputs from current form tab. 2) Copy prompt to ChatGPT manually. 3) Paste ChatGPT output here. 4) Fill current form.</p>
 
-      <label for="formUrls">Form links (one URL per line)</label>
-      <textarea id="formUrls" rows="6" placeholder="https://example.com/form-1\nhttps://example.com/form-2"></textarea>
+        <label class="check">
+          <input id="includeAllFields" type="checkbox" />
+          Capture all inputs/selects/textareas (not only required)
+        </label>
 
-      <label for="maxChars">Max page source chars</label>
-      <input id="maxChars" type="number" min="20000" step="10000" value="120000" />
+        <div class="actions">
+          <button id="captureBtn" type="button">Capture Current Form Inputs</button>
+          <button id="copyPromptBtn" type="button">Copy Prompt</button>
+        </div>
 
-      <label class="check">
-        <input id="autoSubmit" type="checkbox" />
-        Auto submit after filling (only if submit button is found)
-      </label>
+        <label for="promptText">Prompt to share in ChatGPT</label>
+        <textarea id="promptText" rows="8" placeholder="Captured prompt appears here..."></textarea>
 
-      <div class="actions">
-        <button id="runBtn">Run Full Automation</button>
-      </div>
+        <label for="mappingText">Paste ChatGPT output (xpath[TAB]value)</label>
+        <textarea id="mappingText" rows="8" placeholder="xpath\tvalue"></textarea>
+
+        <label class="check">
+          <input id="autoSubmit" type="checkbox" />
+          Auto submit after filling (if submit button exists)
+        </label>
+
+        <div class="actions">
+          <button id="fillBtn" type="button">Fill Current Form from Pasted Output</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Batch Mode</h2>
+        <p class="hint">Open ChatGPT tab first. This mode auto-sends/auto-fills multiple URLs.</p>
+
+        <label for="chatUrl">ChatGPT conversation URL</label>
+        <input id="chatUrl" type="url" />
+
+        <label for="formUrls">Form links (one URL per line)</label>
+        <textarea id="formUrls" rows="5" placeholder="https://example.com/form-1\nhttps://example.com/form-2"></textarea>
+
+        <div class="actions">
+          <button id="runBtn" type="button">Run Full Automation</button>
+        </div>
+      </section>
 
       <pre id="status"></pre>
     </main>

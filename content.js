@@ -29,11 +29,11 @@ function getXPath(el) {
   return `/${parts.join("/")}`;
 }
 
-function serializeRequiredFields() {
+function serializeFields(includeAllFields = false) {
   const fields = Array.from(document.querySelectorAll("input, textarea, select")).filter((el) => {
     const type = (el.getAttribute("type") || "").toLowerCase();
     if (["hidden", "submit", "button", "image", "reset", "file"].includes(type)) return false;
-    return el.required || el.getAttribute("aria-required") === "true";
+    return includeAllFields || el.required || el.getAttribute("aria-required") === "true";
   });
 
   return fields.map((field) => ({
@@ -370,7 +370,7 @@ function maybeSubmitForm() {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   (async () => {
     if (message?.type === "CAPTURE_REQUIRED_FIELDS") {
-      const requiredFields = serializeRequiredFields();
+      const requiredFields = serializeFields(Boolean(message.includeAllFields));
       sendResponse({
         url: location.href,
         requiredFields,

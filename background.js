@@ -9,6 +9,11 @@ async function getChatUrlFromSettings() {
   return data.chatUrl || DEFAULT_CHAT_URL;
 }
 
+async function getActiveTab() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  return tab;
+}
+
 async function waitForTabComplete(tabId, timeoutMs = 30000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -54,13 +59,14 @@ async function sendToTab(tabId, message, retries = 5) {
   throw new Error(lastError?.message || "Could not communicate with tab content script.");
 }
 
-async function runCaptureAndPromptFlow({ sourceTabId, maxHtmlChars }) {
+async function runCaptureAndPromptFlow({ sourceTabId, maxHtmlChars, includeAllFields = false }) {
   const chatUrl = await getChatUrlFromSettings();
   const chatTab = await findOpenChatGPTTab(chatUrl);
   await waitForTabComplete(chatTab.id);
 
   const capture = await sendToTab(sourceTabId, {
     type: "CAPTURE_REQUIRED_FIELDS",
+    includeAllFields,
     maxHtmlChars
   });
 
@@ -203,6 +209,45 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (!sourceTabId) throw new Error("Source tab not found.");
       const result = await runFillFromLatestChatResponse({ sourceTabId, autoSubmit: Boolean(message.autoSubmit) });
       sendResponse(result);
+      return;
+    }
+
+    if (message?.type === "MANUAL_GET_CAPTURE_FOR_ACTIVE_TAB") {
+      const tab = await getActiveTab();
+      if (!tab?.id) throw new Error("No active tab found.");
+
+      const capture = await sendToTab(tab.id, {
+        type: "CAPTURE_REQUIRED_FIELDS",
+        includeAllFields: Boolean(message.includeAllFields)
+      });
+
+      sendResponse({
+        ok: true,
+        fieldCount: capture?.requiredFields?.length || 0,
+        prompt: capture?.prompt || ""
+      });
+      return;
+    }
+
+    if (message?.type === "MANUAL_FILL_ACTIVE_TAB_FROM_TEXT") {
+      const tab = await getActiveTab();
+      if (!tab?.id) throw new Error("No active tab found.");
+
+      const fill = await sendToTab(tab.id, {
+        type: "FILL_FROM_MAPPING_TEXT",
+        mappingText: message.mappingText || "",
+        autoSubmit: Boolean(message.autoSubmit)
+      });
+
+      if (!fill?.ok) {
+        sendResponse({ ok: false, error: fill?.error || "Fill failed." });
+        return;
+      }
+
+      sendResponse({
+        ok: true,
+        message: `Filled ${fill.filled}/${fill.total}${fill.submitted ? " and submitted" : ""}.`
+      });
       return;
     }
 

@@ -47,3 +47,15 @@ The extension also tries to parse table responses where first column is XPath an
 - Use **1) Capture + Ask ChatGPT** to send required field metadata from current form page.
 - Use **2) Fill From ChatGPT Output** to read latest ChatGPT TSV output and fill the current page.
 - On ChatGPT pages, these buttons are shown but disabled.
+
+
+## Manual mode inside extension
+
+1. Open the job form page.
+2. Open extension popup and click **Capture Current Form Inputs**.
+3. Click **Copy Prompt** and paste into ChatGPT manually.
+4. Copy ChatGPT output (`xpath\tvalue` lines).
+5. Paste it into popup field **Paste ChatGPT output**.
+6. Click **Fill Current Form from Pasted Output**.
+
+You can also enable **Capture all inputs/selects/textareas** if you want every field (not only required fields).

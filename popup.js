@@ -1,7 +1,12 @@
 const chatUrlEl = document.getElementById("chatUrl");
 const formUrlsEl = document.getElementById("formUrls");
-const maxCharsEl = document.getElementById("maxChars");
+const includeAllFieldsEl = document.getElementById("includeAllFields");
 const autoSubmitEl = document.getElementById("autoSubmit");
+const promptTextEl = document.getElementById("promptText");
+const mappingTextEl = document.getElementById("mappingText");
+const captureBtn = document.getElementById("captureBtn");
+const copyPromptBtn = document.getElementById("copyPromptBtn");
+const fillBtn = document.getElementById("fillBtn");
 const runBtn = document.getElementById("runBtn");
 const statusEl = document.getElementById("status");
 
@@ -19,21 +24,85 @@ function parseUrls(input) {
 }
 
 async function loadSettings() {
-  const saved = await chrome.storage.local.get(["chatUrl", "formUrls", "maxChars", "autoSubmit"]);
+  const saved = await chrome.storage.local.get([
+    "chatUrl",
+    "formUrls",
+    "autoSubmit",
+    "includeAllFields",
+    "promptText",
+    "mappingText"
+  ]);
+
   chatUrlEl.value = saved.chatUrl || DEFAULT_CHAT_URL;
   formUrlsEl.value = saved.formUrls || "";
-  maxCharsEl.value = String(saved.maxChars || 120000);
   autoSubmitEl.checked = Boolean(saved.autoSubmit);
+  includeAllFieldsEl.checked = Boolean(saved.includeAllFields);
+  promptTextEl.value = saved.promptText || "";
+  mappingTextEl.value = saved.mappingText || "";
 }
 
 async function saveSettings() {
   await chrome.storage.local.set({
     chatUrl: chatUrlEl.value.trim() || DEFAULT_CHAT_URL,
     formUrls: formUrlsEl.value,
-    maxChars: Number(maxCharsEl.value || 120000),
-    autoSubmit: autoSubmitEl.checked
+    autoSubmit: autoSubmitEl.checked,
+    includeAllFields: includeAllFieldsEl.checked,
+    promptText: promptTextEl.value,
+    mappingText: mappingTextEl.value
   });
 }
+
+captureBtn.addEventListener("click", async () => {
+  try {
+    setStatus("Capturing current tab inputs...");
+    await saveSettings();
+
+    const resp = await chrome.runtime.sendMessage({
+      type: "MANUAL_GET_CAPTURE_FOR_ACTIVE_TAB",
+      includeAllFields: includeAllFieldsEl.checked
+    });
+
+    if (!resp?.ok) throw new Error(resp?.error || "Capture failed");
+
+    promptTextEl.value = resp.prompt || "";
+    await saveSettings();
+    setStatus(`Captured ${resp.fieldCount} fields. Copy prompt and paste into ChatGPT.`);
+  } catch (error) {
+    setStatus(`Error: ${error.message || String(error)}`);
+  }
+});
+
+copyPromptBtn.addEventListener("click", async () => {
+  try {
+    const txt = promptTextEl.value.trim();
+    if (!txt) throw new Error("No prompt to copy. Capture first.");
+    await navigator.clipboard.writeText(txt);
+    setStatus("Prompt copied. Paste it into ChatGPT.");
+  } catch (error) {
+    setStatus(`Error: ${error.message || String(error)}`);
+  }
+});
+
+fillBtn.addEventListener("click", async () => {
+  try {
+    const mappingText = mappingTextEl.value.trim();
+    if (!mappingText) throw new Error("Paste ChatGPT output first.");
+
+    setStatus("Filling current form tab...");
+    await saveSettings();
+
+    const resp = await chrome.runtime.sendMessage({
+      type: "MANUAL_FILL_ACTIVE_TAB_FROM_TEXT",
+      mappingText,
+      autoSubmit: autoSubmitEl.checked
+    });
+
+    if (!resp?.ok) throw new Error(resp?.error || "Fill failed");
+    setStatus(resp.message || "Filled successfully.");
+  } catch (error) {
+    setStatus(`Error: ${error.message || String(error)}`);
+  }
+});
 
 runBtn.addEventListener("click", async () => {
   try {
@@ -47,7 +116,6 @@ runBtn.addEventListener("click", async () => {
       type: "AUTOMATE_FORM_LINKS",
       chatUrl: chatUrlEl.value.trim() || DEFAULT_CHAT_URL,
       formUrls,
-      maxHtmlChars: Number(maxCharsEl.value || 120000),
       autoSubmit: autoSubmitEl.checked
     });
 
