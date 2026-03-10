@@ -4,7 +4,7 @@ This extension automates a full workflow for job/application forms:
 
 1. You paste one or many form links.
 2. Extension opens each form and captures required fields + page source.
-3. Extension switches to your ChatGPT conversation and submits a prompt automatically.
+3. Extension switches to your already-open ChatGPT conversation tab and submits a prompt automatically.
 4. It waits for ChatGPT response, extracts `xpath\tvalue` mappings.
 5. It returns to the form tab and fills fields automatically (optionally submits form).
 
@@ -14,7 +14,7 @@ This extension automates a full workflow for job/application forms:
 2. Enable **Developer mode**.
 3. Click **Load unpacked** and choose this folder.
 4. Open extension popup.
-5. Keep/set ChatGPT conversation URL.
+5. Open your target ChatGPT conversation tab first, then keep/set the same URL in popup.
 6. Paste form URLs (one per line).
 7. (Optional) enable **Auto submit after filling**.
 8. Click **Run Full Automation**.
@@ -36,3 +36,5 @@ The extension also tries to parse table responses where first column is XPath an
 - Required fields are detected with `required` / `aria-required="true"`.
 - For `<select>`, available options are included in prompt to improve matching.
 - Some forms include captcha/OTP/manual checks that cannot be bypassed automatically.
+
+- ChatGPT tab must already be open; this extension will not create a new ChatGPT tab automatically.

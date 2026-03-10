@@ -12,11 +12,14 @@ async function waitForTabComplete(tabId, timeoutMs = 30000) {
   throw new Error("Timed out waiting for tab to load");
 }
 
-async function findOrOpenChatGPT(targetUrl) {
+async function findOpenChatGPTTab(targetUrl) {
   const existing = await chrome.tabs.query({ url: ["https://chatgpt.com/*"] });
   const matched = existing.find((tab) => tab.url && tab.url.startsWith(targetUrl));
   if (matched) return matched;
-  return chrome.tabs.create({ url: targetUrl, active: false });
+
+  throw new Error(
+    "ChatGPT tab is not already open. Please open the target ChatGPT conversation tab first, then run automation."
+  );
 }
 
 async function ensureContentScript(tabId) {
@@ -99,7 +102,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     const formUrls = Array.isArray(message.formUrls) ? message.formUrls : [];
     if (!formUrls.length) throw new Error("No form URLs provided.");
 
-    const chatTab = await findOrOpenChatGPT(message.chatUrl);
+    const chatTab = await findOpenChatGPTTab(message.chatUrl);
     await waitForTabComplete(chatTab.id);
 
     const items = [];
