@@ -60,4 +60,5 @@ The extension also tries to parse table responses where first column is XPath an
 
 You can also enable **Capture all inputs/selects/textareas** if you want every field (not only required fields).
 
-- Capture-all mode includes input/select/textarea fields while skipping non-fillable helper inputs (disabled/readonly/hidden type).
+- Capture-all mode includes input/select/textarea fields while skipping non-fillable helper inputs (disabled/hidden type).
+- General capture now supports native inputs, textareas, selects, contenteditable fields, and common combobox/textbox roles used by job portals.

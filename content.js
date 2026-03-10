@@ -29,16 +29,54 @@ function getXPath(el) {
   return `/${parts.join("/")}`;
 }
 
+function isElementVisibleForCapture(el) {
+  if (!el || !el.isConnected) return false;
+
+  // Keep native <select> even when wrapped by libraries like select2.
+  if (el.tagName === "SELECT") return true;
+
+  const style = window.getComputedStyle(el);
+  if (style.display === "none" || style.visibility === "hidden") return false;
+
+  return true;
+}
+
+function isFieldRequiredLike(el, labelText) {
+  return (
+    el.required ||
+    el.getAttribute("aria-required") === "true" ||
+    /\*/.test(labelText || "") ||
+    /required/i.test(el.className || "")
+  );
+}
+
 function serializeFields(includeAllFields = false) {
-  const fields = Array.from(document.querySelectorAll("input, textarea, select")).filter((el) => {
+  const candidates = Array.from(
+    document.querySelectorAll("input, textarea, select, [contenteditable='true'], [role='textbox'], [role='combobox']")
+  );
+
+  const fields = candidates.filter((el) => {
+    const tag = el.tagName.toLowerCase();
     const type = (el.getAttribute("type") || "").toLowerCase();
-    if (["hidden", "submit", "button", "image", "reset", "file"].includes(type)) return false;
+
     if (el.disabled) return false;
-    if ((el.tagName === "INPUT" || el.tagName === "TEXTAREA") && el.readOnly) return false;
-    return includeAllFields || el.required || el.getAttribute("aria-required") === "true";
+    if (!isElementVisibleForCapture(el)) return false;
+
+    if (tag === "input" && ["hidden", "submit", "button", "image", "reset", "file"].includes(type)) return false;
+    if (tag === "button") return false;
+
+    const label = getLabelForField(el);
+    return includeAllFields || isFieldRequiredLike(el, label);
   });
 
-  return fields.map((field) => ({
+  const unique = new Map();
+  for (const field of fields) {
+    const xpath = getXPath(field);
+    if (!xpath) continue;
+    if (!unique.has(xpath)) unique.set(xpath, field);
+  }
+
+  return Array.from(unique.values()).map((field) => ({
     xpath: getXPath(field),
     id: field.id || "",
     name: field.name || "",
@@ -103,11 +141,23 @@ function fillField(el, value) {
     const byText = options.find((o) => o.textContent.trim().toLowerCase() === str.toLowerCase());
     const opt = byValue || byText;
     if (opt) el.value = opt.value;
+  } else if (el.getAttribute("contenteditable") === "true") {
+    el.focus();
+    el.textContent = str;
   } else if (el.type === "checkbox" || el.type === "radio") {
     el.checked = ["yes", "true", "1", "checked"].includes(str.toLowerCase());
   } else {
     el.focus();
-    el.value = str;
+    try {
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+      if (setter && tag === "input") {
+        setter.call(el, str);
+      } else {
+        el.value = str;
+      }
+    } catch (_error) {
+      el.value = str;
+    }
   }
 
   el.dispatchEvent(new Event("input", { bubbles: true }));
