@@ -19,8 +19,29 @@ async function findOrOpenChatGPT(targetUrl) {
   return chrome.tabs.create({ url: targetUrl, active: false });
 }
 
-async function sendToTab(tabId, message) {
-  return chrome.tabs.sendMessage(tabId, message);
+async function ensureContentScript(tabId) {
+  try {
+    await chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] });
+  } catch (_error) {
+    // Ignore: content script may already be injected or execution may be restricted on special pages.
+  }
+}
+
+async function sendToTab(tabId, message, retries = 5) {
+  let lastError = null;
+
+  for (let i = 0; i < retries; i += 1) {
+    try {
+      await ensureContentScript(tabId);
+      const response = await chrome.tabs.sendMessage(tabId, message);
+      return response;
+    } catch (error) {
+      lastError = error;
+      await sleep(350);
+    }
+  }
+
+  throw new Error(lastError?.message || "Could not communicate with tab content script.");
 }
 
 async function automateSingleForm({ url, chatTabId, maxHtmlChars, autoSubmit }) {

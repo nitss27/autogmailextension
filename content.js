@@ -143,13 +143,24 @@ function getStopButton() {
 
 function setEditorText(editor, text) {
   editor.focus();
+  const value = String(text || "");
+
   if (editor.tagName.toLowerCase() === "textarea") {
-    editor.value = text;
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
+    if (setter) {
+      setter.call(editor, value);
+    } else {
+      editor.value = value;
+    }
     editor.dispatchEvent(new Event("input", { bubbles: true }));
     return;
   }
+
   editor.textContent = "";
-  document.execCommand("insertText", false, text);
+  const inserted = document.execCommand("insertText", false, value);
+  if (!inserted) {
+    editor.textContent = value;
+  }
   editor.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
@@ -246,8 +257,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       if (!editor) throw new Error("ChatGPT input box not found.");
 
       setEditorText(editor, message.promptText || "");
-      await sleep(500);
-      const submit = getChatSubmitButton();
+
+      let submit = null;
+      for (let i = 0; i < 12; i += 1) {
+        submit = getChatSubmitButton();
+        if (submit && !submit.disabled && submit.getAttribute("aria-disabled") !== "true") break;
+        await sleep(300);
+      }
+
       if (!submit) throw new Error("ChatGPT send button not found.");
       submit.click();
 
@@ -280,6 +297,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
       const submitted = message.autoSubmit ? maybeSubmitForm() : false;
       sendResponse({ ok: true, filled, total: mappings.length, submitted });
+      return;
+    }
+
+    if (message?.type === "PING_CONTENT") {
+      sendResponse({ ok: true, href: location.href });
       return;
     }
 
