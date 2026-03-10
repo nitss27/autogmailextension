@@ -136,6 +136,37 @@ function cleanValue(value) {
   return out;
 }
 
+function normalizeXPath(xpathRaw) {
+  let xpath = String(xpathRaw || "").trim();
+  if (!xpath) return "";
+
+  if (/^\/\/\[/.test(xpath)) xpath = `//*${xpath.slice(2)}`;
+  if (/^\/\*\*\[@/.test(xpath)) xpath = xpath.replace(/^\/\*\*/, "//*");
+  xpath = xpath.replace(/^[-•\"']+\s*/, "").trim();
+  return xpath;
+}
+
+function parseLineToMapping(line) {
+  const clean = String(line || "").trim();
+  if (!clean || /^xpath\s+value$/i.test(clean) || /^xpath\tvalue$/i.test(clean)) return null;
+
+  if (clean.includes("\t")) {
+    const [left, ...rest] = clean.split("\t");
+    const xpath = normalizeXPath(left);
+    const value = cleanValue(rest.join("\t"));
+    if (xpath && value) return { xpath, value };
+  }
+
+  const m = clean.match(/^(\/\/[\S]+|\/\*[\S]+)\s{2,}(.+)$/);
+  if (m) {
+    const xpath = normalizeXPath(m[1]);
+    const value = cleanValue(m[2]);
+    if (xpath && value) return { xpath, value };
+  }
+
+  return null;
+}
+
 function parseMappingText(mappingText) {
   const normalized = normalizeMappingText(mappingText);
   const lines = normalized
@@ -145,13 +176,12 @@ function parseMappingText(mappingText) {
 
   const rows = [];
   for (const line of lines) {
-    if (/^xpath\tvalue$/i.test(line)) continue;
-    const [xpath, ...rest] = line.split("\t");
-    if (!xpath || !rest.length) continue;
-    rows.push({ xpath: xpath.trim(), value: cleanValue(rest.join("\t")) });
+    const parsed = parseLineToMapping(line);
+    if (parsed) rows.push(parsed);
   }
   return rows;
 }
+
 
 function getChatEditor() {
   return (
@@ -294,22 +324,37 @@ function parseAssistantCodeBlockTsv() {
   return "";
 }
 
+function getLatestAssistantText() {
+  const messages = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
+  const latest = messages[messages.length - 1];
+  if (!latest) return "";
+
+  const md = latest.querySelector('.markdown');
+  return normalizeMappingText((md || latest).innerText || (md || latest).textContent || "");
+}
+
 function parseAssistantPlainTextTsv() {
-  const articles = Array.from(document.querySelectorAll("article"));
-  const latest = articles[articles.length - 1];
-  const text = normalizeMappingText(latest ? latest.innerText : document.body.innerText);
+  const text = getLatestAssistantText() || normalizeMappingText(document.body.innerText);
   if (!text) return "";
 
-  const lines = text
-    .split(/\r?\n/)
-    .map((x) => x.trim())
-    .filter(Boolean)
-    .filter((x) => x.includes("\t") && (x.startsWith("/") || x.startsWith("//*[@") || /^xpath\tvalue$/i.test(x)));
+  const rawLines = text.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+  const lines = [];
+
+  for (const line of rawLines) {
+    if (/^xpath\s+value$/i.test(line) || /^xpath\tvalue$/i.test(line)) {
+      lines.push("xpath\tvalue");
+      continue;
+    }
+
+    const parsed = parseLineToMapping(line);
+    if (parsed) lines.push(`${parsed.xpath}\t${parsed.value}`);
+  }
 
   if (!lines.length) return "";
   if (!/^xpath\tvalue$/i.test(lines[0])) lines.unshift("xpath\tvalue");
   return lines.join("\n");
 }
+
 
 function maybeSubmitForm() {
   const submit =
