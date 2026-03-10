@@ -1,58 +1,64 @@
-# Gmail Auto Sender (Chrome Extension)
+# AI Form Auto Filler (Chrome Extension)
 
-A Manifest V3 extension that automates Gmail compose and sends emails **one-by-one**.
+This extension automates a full workflow for job/application forms:
 
-## Features
-
-- Manual Gmail flow automation: **Compose → To → Subject → Body → Attach → Send**.
-- Faster send loop while keeping the same sequence, using short dynamic waits and not blocking long on previous delivery completion.
-- Batch sending, one recipient at a time, with a strict single-compose lock to prevent overlapping sends.
-- Input modes:
-  - Single email form.
-  - Pasted CSV/TSV rows with headers: `to,subject,body[,sent,attach]`.
-  - Google Sheet URL (public CSV export, **no OAuth**).
-- Rich body formatting support:
-  - raw HTML from sheet/body is preserved if provided,
-  - plus `**bold**`, `__underline__`, and `- bullet items` for plain text,
-  - preserves multi-line body text from quoted CSV cells (line breaks kept).
-- Attachment options:
-  - global toggle to send without attachment,
-  - in sheet mode, optional row-level attachment rule from `attach` column (`yes/true/1`).
-- Sheet status handling:
-  - only uses sheet `sent` column to determine unsent rows,
-  - after successful send, tries to write `YES` back to sheet `sent` column.
-- Persistent saved settings:
-  - last mode,
-  - Google Sheet URL,
-  - send limit per run,
-  - attachment toggles.
+1. You paste one or many form links.
+2. Extension opens each form and captures required fields + page source.
+3. Extension switches to your already-open ChatGPT conversation tab and submits a prompt automatically.
+4. It waits for ChatGPT response, extracts `xpath\tvalue` mappings.
+5. It returns to the form tab and fills fields automatically (optionally submits form).
 
 ## How to use
 
 1. Open `chrome://extensions`.
 2. Enable **Developer mode**.
-3. Click **Load unpacked** and pick this folder.
-4. Open Gmail in a tab and sign in.
-5. Open extension popup and choose input mode.
-6. Set attachment toggle/rule as needed, and choose file only if required.
-7. Click **Send One-by-One**.
+3. Click **Load unpacked** and choose this folder.
+4. Open extension popup.
+5. Open your target ChatGPT conversation tab first, then keep/set the same URL in popup.
+6. Paste form URLs (one per line).
+7. (Optional) enable **Auto submit after filling**.
+8. Click **Run Full Automation**.
 
-## Google Sheet mode (no OAuth)
+## ChatGPT response format expected
 
-- Required columns: `to,subject,body,sent`
-- Optional attachment rule column: `attach`
-  - `yes/true/1` => attachment sent for that row (when global attachment toggle is ON)
-  - blank/other => send without attachment for that row
-- Ensure the sheet is accessible as CSV export (public/published as needed).
-- Paste the Google Sheet URL in popup once; it is saved.
+Best output is TSV:
 
-### If you see "Failed to fetch"
+```text
+xpath\tvalue
+//*[@id="firstName"]\tJohn
+//*[@id="lastName"]\tDoe
+```
 
-- Ensure the sheet is shared/published so CSV export is accessible.
-- Keep a `gid` in the URL when targeting a specific tab.
-- The extension tries multiple CSV endpoints (`/export?format=csv` and `gviz/tq?tqx=out:csv`) automatically.
+The extension also tries to parse table responses where first column is XPath and second column is value.
 
 ## Notes
 
-- Gmail may block risky attachment types for security.
-- Use safer file types like PDF/DOC/DOCX/TXT for resumes.
+- Required fields are detected with `required` / `aria-required="true"`.
+- For `<select>`, available options are included in prompt to improve matching.
+- Only compact field metadata (xpath/name/label/options) is sent to ChatGPT; full page HTML is not sent.
+- The extension can parse TSV from code blocks, markdown tables, or plain text response lines.
+- Some forms include captcha/OTP/manual checks that cannot be bypassed automatically.
+
+- ChatGPT tab must already be open; this extension will not create a new ChatGPT tab automatically.
+
+## On-page manual buttons
+
+- Every page now shows a small **AI Form Helper** panel in the bottom-right corner.
+- Use **1) Capture + Ask ChatGPT** to send required field metadata from current form page.
+- Use **2) Fill From ChatGPT Output** to read latest ChatGPT TSV output and fill the current page.
+- On ChatGPT pages, these buttons are shown but disabled.
+
+
+## Manual mode inside extension
+
+1. Open the job form page.
+2. Open extension popup and click **Capture Current Form Inputs**.
+3. Click **Copy Prompt** and paste into ChatGPT manually.
+4. Copy ChatGPT output (`xpath\tvalue` lines).
+5. Paste it into popup field **Paste ChatGPT output**.
+6. Click **Fill Current Form from Pasted Output**.
+
+You can also enable **Capture all inputs/selects/textareas** if you want every field (not only required fields).
+
+- Capture-all mode includes input/select/textarea fields while skipping non-fillable helper inputs (disabled/hidden type).
+- General capture now supports native inputs, textareas, selects, contenteditable fields, and common combobox/textbox roles used by job portals.

@@ -2,54 +2,58 @@
 <html>
   <head>
     <meta charset="UTF-8" />
-    <title>Gmail Auto Sender</title>
+    <title>AI Form Auto Filler</title>
     <link rel="stylesheet" href="popup.css" />
   </head>
   <body>
     <main>
-      <h1>Gmail Auto Sender</h1>
-      <p class="hint">No OAuth Client ID needed. Google Sheet mode uses public CSV export.</p>
+      <h1>AI Form Auto Filler</h1>
 
-      <label for="mode">Input mode</label>
-      <select id="mode">
-        <option value="single">Single email</option>
-        <option value="paste">Paste rows (CSV/TSV)</option>
-        <option value="sheet">Google Sheet URL</option>
-      </select>
+      <section class="card">
+        <h2>Manual Mode (recommended)</h2>
+        <p class="hint">1) Capture inputs from current form tab. 2) Copy prompt to ChatGPT manually. 3) Paste ChatGPT output here. 4) Fill current form.</p>
 
-      <section id="singleFields" class="mode-block">
-        <label for="to">To</label>
-        <input id="to" type="text" placeholder="person@example.com" />
-        <label for="subject">Subject</label>
-        <input id="subject" type="text" placeholder="Application for role" />
-        <label for="body">Body (HTML supported + **bold**, __underline__, and - bullets)</label>
-        <textarea id="body" rows="5" placeholder="Hello...\n- item"></textarea>
+        <label class="check">
+          <input id="includeAllFields" type="checkbox" />
+          Capture all inputs/selects/textareas (not only required)
+        </label>
+
+        <div class="actions">
+          <button id="captureBtn" type="button">Capture Current Form Inputs</button>
+          <button id="copyPromptBtn" type="button">Copy Prompt</button>
+        </div>
+
+        <label for="promptText">Prompt to share in ChatGPT</label>
+        <textarea id="promptText" rows="8" placeholder="Captured prompt appears here..."></textarea>
+
+        <label for="mappingText">Paste ChatGPT output (xpath[TAB]value)</label>
+        <textarea id="mappingText" rows="8" placeholder="xpath\tvalue"></textarea>
+
+        <label class="check">
+          <input id="autoSubmit" type="checkbox" />
+          Auto submit after filling (if submit button exists)
+        </label>
+
+        <div class="actions">
+          <button id="fillBtn" type="button">Fill Current Form from Pasted Output</button>
+        </div>
       </section>
 
-      <section id="pasteFields" class="mode-block hidden">
-        <label for="rows">Paste rows with headers: to,subject,body[,sent,attach]</label>
-        <textarea id="rows" rows="8" placeholder="to,subject,body,sent,attach"></textarea>
+      <section class="card">
+        <h2>Batch Mode</h2>
+        <p class="hint">Open ChatGPT tab first. This mode auto-sends/auto-fills multiple URLs.</p>
+
+        <label for="chatUrl">ChatGPT conversation URL</label>
+        <input id="chatUrl" type="url" />
+
+        <label for="formUrls">Form links (one URL per line)</label>
+        <textarea id="formUrls" rows="5" placeholder="https://example.com/form-1\nhttps://example.com/form-2"></textarea>
+
+        <div class="actions">
+          <button id="runBtn" type="button">Run Full Automation</button>
+        </div>
       </section>
 
-      <section id="sheetFields" class="mode-block hidden">
-        <label for="sheetUrl">Google Sheet URL (saved)</label>
-        <input id="sheetUrl" type="url" placeholder="https://docs.google.com/spreadsheets/d/..." />
-        <p class="note">Sheet mode uses only the sheet's <code>sent</code> column (no local sent tracking).</p>
-      </section>
-
-      <label for="sendLimit">Send limit per run (saved, blank = all)</label>
-      <input id="sendLimit" type="number" min="1" step="1" placeholder="e.g. 20" />
-
-      <label class="check"><input id="enableAttachment" type="checkbox" checked /> Enable attachment</label>
-      <label class="check"><input id="sheetAttachRule" type="checkbox" checked /> In sheet mode, attach only when row column <code>attach</code> is YES</label>
-
-      <label for="resumeFile">Attachment file</label>
-      <input id="resumeFile" type="file" accept=".pdf,.doc,.docx,.txt" />
-
-      <div class="actions">
-        <button id="runBtn">Send One-by-One</button>
-        <button id="clearBtn" type="button">Clear saved settings</button>
-      </div>
       <pre id="status"></pre>
     </main>
     <script src="popup.js"></script>

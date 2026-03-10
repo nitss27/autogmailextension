@@ -1,273 +1,603 @@
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-let batchInProgress = false;
-
-async function waitFor(getter, timeoutMs = 5000, pollMs = 80) {
-  const start = Date.now();
-  let value = getter();
-  while (!value && Date.now() - start < timeoutMs) {
-    await sleep(pollMs);
-    value = getter();
+function getLabelForField(field) {
+  if (field.id) {
+    const label = document.querySelector(`label[for="${CSS.escape(field.id)}"]`);
+    if (label) return label.textContent?.trim() || "";
   }
-  return value;
+
+  const wrapped = field.closest("label");
+  if (wrapped) return wrapped.textContent?.trim() || "";
+
+  return field.getAttribute("aria-label") || field.getAttribute("placeholder") || "";
 }
 
-function getComposeDialogs() {
-  return Array.from(document.querySelectorAll("div[role='dialog']")).filter((el) => document.contains(el));
+function getXPath(el) {
+  if (el.id) return `//*[@id="${el.id}"]`;
+  if (el.name) return `//*[@name="${el.name}"]`;
+
+  const parts = [];
+  let cur = el;
+  while (cur && cur.nodeType === Node.ELEMENT_NODE && cur !== document.body) {
+    let idx = 1;
+    let sib = cur.previousElementSibling;
+    while (sib) {
+      if (sib.tagName === cur.tagName) idx += 1;
+      sib = sib.previousElementSibling;
+    }
+    parts.unshift(`${cur.tagName.toLowerCase()}[${idx}]`);
+    cur = cur.parentElement;
+  }
+  return `/${parts.join("/")}`;
 }
 
-async function waitForNoComposeDialog(timeoutMs = 5000, pollMs = 80) {
+function isElementVisibleForCapture(el) {
+  if (!el || !el.isConnected) return false;
+
+  // Keep native <select> even when wrapped by libraries like select2.
+  if (el.tagName === "SELECT") return true;
+
+  const style = window.getComputedStyle(el);
+  if (style.display === "none" || style.visibility === "hidden") return false;
+
+  return true;
+}
+
+function isFieldRequiredLike(el, labelText) {
+  return (
+    el.required ||
+    el.getAttribute("aria-required") === "true" ||
+    /\*/.test(labelText || "") ||
+    /required/i.test(el.className || "")
+  );
+}
+
+function serializeFields(includeAllFields = false) {
+  const candidates = Array.from(
+    document.querySelectorAll("input, textarea, select, [contenteditable='true'], [role='textbox'], [role='combobox']")
+  );
+
+  const fields = candidates.filter((el) => {
+    const tag = el.tagName.toLowerCase();
+    const type = (el.getAttribute("type") || "").toLowerCase();
+
+    if (el.disabled) return false;
+    if (!isElementVisibleForCapture(el)) return false;
+
+    if (tag === "input" && ["hidden", "submit", "button", "image", "reset", "file"].includes(type)) return false;
+    if (tag === "button") return false;
+
+    const label = getLabelForField(el);
+    return includeAllFields || isFieldRequiredLike(el, label);
+  });
+
+  const unique = new Map();
+  for (const field of fields) {
+    const xpath = getXPath(field);
+    if (!xpath) continue;
+    if (!unique.has(xpath)) unique.set(xpath, field);
+  }
+
+  return Array.from(unique.values()).map((field) => ({
+    xpath: getXPath(field),
+    id: field.id || "",
+    name: field.name || "",
+    tag: field.tagName.toLowerCase(),
+    type: (field.getAttribute("type") || "").toLowerCase(),
+    label: getLabelForField(field),
+    options:
+      field.tagName.toLowerCase() === "select"
+        ? Array.from(field.options)
+            .map((o) => o.textContent.trim())
+            .filter(Boolean)
+            .slice(0, 50)
+        : []
+  }));
+}
+
+function buildPrompt(requiredFields, url) {
+  const compactFields = requiredFields.map((field) => ({
+    xpath: field.xpath,
+    name: field.name,
+    id: field.id,
+    label: field.label,
+    tag: field.tag,
+    type: field.type,
+    options: field.options
+  }));
+
+  return [
+    "Fill this form using realistic candidate values.",
+    `Form URL: ${url}`,
+    "",
+    "Return ONLY plain TSV with exact header:",
+    "xpath	value",
+    "",
+    "Rules:",
+    "1) Include one row for each field below.",
+    "2) Keep xpath exactly unchanged.",
+    "3) For selects, choose only from provided options.",
+    "4) Do not return markdown, mailto links, or explanations.",
+    "5) If unsure, return a safe placeholder value.",
+    "",
+    "Field metadata:",
+    JSON.stringify(compactFields, null, 2)
+  ].join("\n");
+}
+
+function evaluateXPath(xpath) {
+  try {
+    return document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function fillField(el, value) {
+  const tag = el.tagName.toLowerCase();
+  const str = String(value || "").trim();
+
+  if (tag === "select") {
+    const options = Array.from(el.options);
+    const byValue = options.find((o) => o.value.toLowerCase() === str.toLowerCase());
+    const byText = options.find((o) => o.textContent.trim().toLowerCase() === str.toLowerCase());
+    const opt = byValue || byText;
+    if (opt) el.value = opt.value;
+  } else if (el.getAttribute("contenteditable") === "true") {
+    el.focus();
+    el.textContent = str;
+  } else if (el.type === "checkbox" || el.type === "radio") {
+    el.checked = ["yes", "true", "1", "checked"].includes(str.toLowerCase());
+  } else {
+    el.focus();
+    try {
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+      if (setter && tag === "input") {
+        setter.call(el, str);
+      } else {
+        el.value = str;
+      }
+    } catch (_error) {
+      el.value = str;
+    }
+  }
+
+  el.dispatchEvent(new Event("input", { bubbles: true }));
+  el.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+function normalizeMappingText(text) {
+  let out = String(text || "").trim();
+  if (!out) return "";
+  out = out.replace(/\r\n/g, "\n");
+  if (out.includes("\\n")) out = out.replace(/\\n/g, "\n");
+  return out;
+}
+
+function cleanValue(value) {
+  let out = String(value || "").trim();
+  const markdownLink = out.match(/^\[(.*?)\]\((.*?)\)$/);
+  if (markdownLink) {
+    const label = markdownLink[1] || "";
+    const href = markdownLink[2] || "";
+    if (/^mailto:/i.test(href)) {
+      out = href.replace(/^mailto:/i, "").trim() || label.trim();
+    } else {
+      out = label.trim() || href.trim();
+    }
+  }
+  out = out.replace(/^['"]|['"]$/g, "");
+  return out;
+}
+
+function normalizeXPath(xpathRaw) {
+  let xpath = String(xpathRaw || "").trim();
+  if (!xpath) return "";
+
+  if (/^\/\/\[/.test(xpath)) xpath = `//*${xpath.slice(2)}`;
+  if (/^\/\*\*\[@/.test(xpath)) xpath = xpath.replace(/^\/\*\*/, "//*");
+  xpath = xpath.replace(/^[-•\"']+\s*/, "").trim();
+  return xpath;
+}
+
+function parseLineToMapping(line) {
+  const clean = String(line || "").trim();
+  if (!clean || /^xpath\s+value$/i.test(clean) || /^xpath\tvalue$/i.test(clean)) return null;
+
+  if (clean.includes("\t")) {
+    const [left, ...rest] = clean.split("\t");
+    const xpath = normalizeXPath(left);
+    const value = cleanValue(rest.join("\t"));
+    if (xpath && value) return { xpath, value };
+  }
+
+  const m = clean.match(/^(\/\/[\S]+|\/\*[\S]+)\s{2,}(.+)$/);
+  if (m) {
+    const xpath = normalizeXPath(m[1]);
+    const value = cleanValue(m[2]);
+    if (xpath && value) return { xpath, value };
+  }
+
+  return null;
+}
+
+function parseMappingText(mappingText) {
+  const normalized = normalizeMappingText(mappingText);
+  const lines = normalized
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  const rows = [];
+  for (const line of lines) {
+    const parsed = parseLineToMapping(line);
+    if (parsed) rows.push(parsed);
+  }
+  return rows;
+}
+
+
+function getChatEditor() {
+  return (
+    document.querySelector("#prompt-textarea") ||
+    document.querySelector("textarea[data-testid='prompt-textarea']") ||
+    document.querySelector("[contenteditable='true']")
+  );
+}
+
+function getChatSubmitButton() {
+  return (
+    document.querySelector('button[id="composer-submit-button"]:not([data-testid="stop-button"])') ||
+    document.querySelector("button[data-testid='send-button']") ||
+    document.querySelector("button[aria-label*='Send']")
+  );
+}
+
+function getStopButton() {
+  return document.querySelector('button[aria-label="Stop streaming"], button[data-testid="stop-button"]');
+}
+
+
+async function waitForChatEditor(timeoutMs = 30000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    if (getComposeDialogs().length === 0) return true;
-    await sleep(pollMs);
+    const editor = getChatEditor();
+    if (editor) return editor;
+    await sleep(300);
   }
-  return getComposeDialogs().length === 0;
+  return null;
 }
 
-function dispatchInput(node, value) {
-  node.focus();
-  node.value = value;
-  node.dispatchEvent(new Event("input", { bubbles: true }));
-  node.dispatchEvent(new Event("change", { bubbles: true }));
+function isSubmitReady(button) {
+  if (!button) return false;
+  if (button.disabled) return false;
+  if (button.getAttribute("aria-disabled") === "true") return false;
+  if (button.getAttribute("data-testid") === "stop-button") return false;
+  if ((button.getAttribute("aria-label") || "").toLowerCase().includes("stop streaming")) return false;
+  return true;
 }
 
-function findComposeButton() {
-  return (
-    document.querySelector("div.T-I.T-I-KE.L3[role='button'][jscontroller='eIu7Db']") ||
-    document.querySelector("div[role='button'][gh='cm']") ||
-    document.querySelector("div[role='button'][jscontroller='eIu7Db']")
-  );
-}
+async function waitForSendButtonReady(timeoutMs = 20000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (getStopButton()) {
+      await sleep(500);
+      continue;
+    }
 
-function findActiveComposeRoot() {
-  const dialogs = getComposeDialogs();
-  return dialogs[dialogs.length - 1] || null;
-}
-
-function findToInput(root) {
-  return (
-    root.querySelector("input[aria-label='To recipients']") ||
-    root.querySelector("div.aoD.hl input") ||
-    root.querySelector("textarea[name='to']") ||
-    root.querySelector("input[peoplekit-id]")
-  );
-}
-
-function findSubjectInput(root) {
-  return root.querySelector("input[name='subjectbox']");
-}
-
-function findBodyBox(root) {
-  return (
-    root.querySelector("div[role='textbox'][aria-label='Message Body']") ||
-    root.querySelector("div[aria-label='Message Body']")
-  );
-}
-
-function findAttachButton(root) {
-  return (
-    root.querySelector("div.a1.aaA.aMZ") ||
-    root.querySelector("div[command='Files']") ||
-    root.querySelector("div[aria-label='Attach files']")
-  );
-}
-
-function findFileInput(root) {
-  return root.querySelector("input[type='file'][name='Filedata']") || root.querySelector("input[type='file']");
-}
-
-function findSendButton(root) {
-  return (
-    root.querySelector("div.T-I.J-J5-Ji.aoO.v7.T-I-atl.L3[role='button']") ||
-    root.querySelector("div[role='button'][data-tooltip^='Send']") ||
-    root.querySelector("div[aria-label^='Send']")
-  );
-}
-
-
-function isSendButtonEnabled(btn) {
-  if (!btn) return false;
-  const ariaDisabled = btn.getAttribute("aria-disabled") === "true";
-  const classDisabled = btn.classList.contains("T-I-JW");
-  return !ariaDisabled && !classDisabled;
-}
-
-function formatBodyToHtml(text) {
-  const bodyText = String(text || "");
-  const trimmed = bodyText.trim();
-
-  if (/<\/?[a-z][\s\S]*>/i.test(trimmed)) {
-    return trimmed;
+    const button = getChatSubmitButton();
+    if (isSubmitReady(button)) return button;
+    await sleep(250);
   }
+  return null;
+}
 
-  let escaped = bodyText.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+function setEditorText(editor, text) {
+  editor.focus();
+  const value = String(text || "");
 
-  escaped = escaped.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
-  escaped = escaped.replace(/__(.+?)__/g, "<u>$1</u>");
-
-  const lines = escaped.split(/\r?\n/);
-  const output = [];
-  let inList = false;
-
-  for (const line of lines) {
-    const bullet = line.match(/^\s*-\s+(.*)$/);
-    if (bullet) {
-      if (!inList) {
-        output.push("<ul>");
-        inList = true;
-      }
-      output.push(`<li>${bullet[1]}</li>`);
+  if (editor.tagName.toLowerCase() === "textarea") {
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
+    if (setter) {
+      setter.call(editor, value);
     } else {
-      if (inList) {
-        output.push("</ul>");
-        inList = false;
+      editor.value = value;
+    }
+    editor.dispatchEvent(new Event("input", { bubbles: true }));
+    return;
+  }
+
+  editor.textContent = "";
+  const inserted = document.execCommand("insertText", false, value);
+  if (!inserted) {
+    editor.textContent = value;
+  }
+  editor.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+async function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitUntilNotStreaming(timeoutMs = 120000) {
+  const start = Date.now();
+  let sawStreaming = false;
+
+  while (Date.now() - start < timeoutMs) {
+    const stop = getStopButton();
+    if (stop) {
+      sawStreaming = true;
+      await sleep(1200);
+      continue;
+    }
+
+    if (sawStreaming) {
+      await sleep(1000);
+      return true;
+    }
+
+    await sleep(700);
+  }
+
+  return !getStopButton();
+}
+
+function parseAssistantTablesToTsv() {
+  const tables = document.querySelectorAll("article table, main table, table");
+  let output = "xpath\tvalue\n";
+  let count = 0;
+
+  tables.forEach((table) => {
+    const rows = table.querySelectorAll("tr");
+    rows.forEach((row) => {
+      const cells = row.querySelectorAll("td,th");
+      if (cells.length < 2) return;
+      const left = (cells[0].textContent || "").trim();
+      const right = (cells[1].textContent || "").trim().replace(/\n/g, " ");
+      if (!left || !right) return;
+      if (left.toLowerCase() === "xpath" && right.toLowerCase() === "value") return;
+      if (left.startsWith("/") || left.startsWith("//*[@")) {
+        output += `${left}\t${right}\n`;
+        count += 1;
       }
-      output.push(line ? `<div>${line}</div>` : "<div><br></div>");
-    }
-  }
-  if (inList) output.push("</ul>");
-  return output.join("");
-}
-
-function dataUrlToFile(dataUrl, fileName, mimeType) {
-  const [meta, base64] = dataUrl.split(",");
-  const mime = mimeType || meta.match(/data:(.*?);base64/)?.[1] || "application/octet-stream";
-  const bin = atob(base64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
-  return new File([bytes], fileName, { type: mime });
-}
-
-async function attachFile(root, attachment) {
-  let input = await waitFor(() => findFileInput(root), 1200, 70);
-
-  if (!input) {
-    const attachBtn = findAttachButton(root);
-    if (!attachBtn) throw new Error("Attachment button not found");
-    attachBtn.click();
-    input = await waitFor(() => findFileInput(root), 3500, 70);
-  }
-
-  if (!input) throw new Error("File input not found");
-
-  const file = dataUrlToFile(attachment.dataUrl, attachment.name, attachment.type);
-  const dt = new DataTransfer();
-  dt.items.add(file);
-  input.files = dt.files;
-  input.dispatchEvent(new Event("change", { bubbles: true }));
-
-  await sleep(500);
-  const blocked = root.querySelector(".dN");
-  if (blocked && /blocked/i.test(blocked.textContent || "")) {
-    throw new Error("Gmail blocked the attachment for security reasons");
-  }
-}
-
-async function sendSingle(row, attachment) {
-  await waitForNoComposeDialog(1200, 60);
-
-  const composeBtn = await waitFor(() => findComposeButton(), 5000, 70);
-  if (!composeBtn) throw new Error("Compose button not found");
-  composeBtn.click();
-
-  const root = await waitFor(() => findActiveComposeRoot(), 5000, 80);
-  if (!root) throw new Error("Compose window did not open");
-
-  const toInput = await waitFor(() => findToInput(root), 5000, 80);
-  const subjectInput = await waitFor(() => findSubjectInput(root), 5000, 80);
-  const bodyBox = await waitFor(() => findBodyBox(root), 5000, 80);
-
-  if (!toInput || !subjectInput || !bodyBox) {
-    throw new Error("Compose fields not found");
-  }
-
-  dispatchInput(toInput, row.to);
-  toInput.dispatchEvent(
-    new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true })
-  );
-
-  dispatchInput(subjectInput, row.subject);
-
-  bodyBox.focus();
-  bodyBox.innerHTML = formatBodyToHtml(row.body);
-  bodyBox.dispatchEvent(new Event("input", { bubbles: true }));
-
-  if (row.shouldAttach && attachment) {
-    await attachFile(root, attachment);
-  }
-
-  await sleep(250);
-  const sendBtn = await waitFor(() => {
-    const btn = findSendButton(root);
-    return isSendButtonEnabled(btn) ? btn : null;
-  }, 6000, 80);
-  if (!sendBtn) throw new Error("Send button is not ready (check To/Subject/body)");
-
-  sendBtn.click();
-
-  // Fast mode: do not block long on previous email delivery.
-  // Move to next row as soon as compose closes (or after a short timeout).
-  const closedQuickly = await waitFor(
-    () => (!document.contains(root) ? true : null),
-    1400,
-    60
-  );
-
-  if (!closedQuickly) {
-    // Fallback trigger if Gmail did not immediately process click.
-    bodyBox.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, ctrlKey: true, bubbles: true })
-    );
-    await waitFor(
-      () => {
-        const gone = !document.contains(root);
-        const messageSentToast = document.querySelector("span.bAq");
-        return gone || (messageSentToast && /message sent/i.test(messageSentToast.textContent || "")) ? true : null;
-      },
-      1800,
-      70
-    );
-  }
-}
-
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message?.type !== "RUN_BATCH_SEND") return;
-
-  if (batchInProgress) {
-    sendResponse({ ok: false, error: "A batch is already running. Please wait for it to finish." });
-    return false;
-  }
-
-  batchInProgress = true;
-
-  (async () => {
-    const rows = message.payload?.rows || [];
-    const attachment = message.payload?.attachment;
-
-    if (!rows.length) {
-      throw new Error("Missing rows");
-    }
-
-    if (rows.some((row) => row.shouldAttach) && !attachment?.dataUrl) {
-      throw new Error("Rows require attachment but no attachment payload provided");
-    }
-
-    const sentRows = [];
-    for (const row of rows) {
-      await sendSingle(row, attachment);
-      sentRows.push(row);
-      await sleep(80);
-    }
-
-    sendResponse({ ok: true, sentCount: sentRows.length, sentRows });
-  })()
-    .catch((err) => {
-      sendResponse({ ok: false, error: err.message || "Unknown error" });
-    })
-    .finally(() => {
-      batchInProgress = false;
     });
+  });
+
+  return count > 0 ? output.trim() : "";
+}
+
+function parseAssistantCodeBlockTsv() {
+  const blocks = Array.from(document.querySelectorAll("article pre code, main pre code, pre code"));
+  for (let i = blocks.length - 1; i >= 0; i -= 1) {
+    const text = (blocks[i].textContent || "").trim();
+    if (!text) continue;
+    if (/^xpath\tvalue/im.test(text) || /\*\[@id=/.test(text)) {
+      return text;
+    }
+  }
+  return "";
+}
+
+function getLatestAssistantText() {
+  const messages = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
+  const latest = messages[messages.length - 1];
+  if (!latest) return "";
+
+  const md = latest.querySelector('.markdown');
+  return normalizeMappingText((md || latest).innerText || (md || latest).textContent || "");
+}
+
+function parseAssistantPlainTextTsv() {
+  const text = getLatestAssistantText() || normalizeMappingText(document.body.innerText);
+  if (!text) return "";
+
+  const rawLines = text.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+  const lines = [];
+
+  for (const line of rawLines) {
+    if (/^xpath\s+value$/i.test(line) || /^xpath\tvalue$/i.test(line)) {
+      lines.push("xpath\tvalue");
+      continue;
+    }
+
+    const parsed = parseLineToMapping(line);
+    if (parsed) lines.push(`${parsed.xpath}\t${parsed.value}`);
+  }
+
+  if (!lines.length) return "";
+  if (!/^xpath\tvalue$/i.test(lines[0])) lines.unshift("xpath\tvalue");
+  return lines.join("\n");
+}
+
+
+function maybeSubmitForm() {
+  const submit =
+    document.querySelector("button[type='submit']") ||
+    document.querySelector("input[type='submit']") ||
+    document.querySelector("button[id*='submit']");
+
+  if (!submit) return false;
+  submit.click();
+  return true;
+}
+
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  (async () => {
+    if (message?.type === "CAPTURE_REQUIRED_FIELDS") {
+      const requiredFields = serializeFields(Boolean(message.includeAllFields));
+      sendResponse({
+        url: location.href,
+        requiredFields,
+        prompt: buildPrompt(requiredFields, location.href)
+      });
+      return;
+    }
+
+    if (message?.type === "CHATGPT_SEND_AND_WAIT") {
+      const editor = await waitForChatEditor(30000);
+      if (!editor) throw new Error("ChatGPT input box not found.");
+
+      setEditorText(editor, message.promptText || "");
+      await sleep(250);
+
+      const submit = await waitForSendButtonReady(25000);
+      if (!submit) throw new Error("ChatGPT send button not ready.");
+      submit.click();
+
+      const done = await waitUntilNotStreaming(Number(message.timeoutMs || 120000));
+      if (!done) throw new Error("Timed out waiting for ChatGPT response.");
+
+      sendResponse({ ok: true });
+      return;
+    }
+
+    if (message?.type === "CHATGPT_EXTRACT_MAPPINGS") {
+      const codeTsv = parseAssistantCodeBlockTsv();
+      const tableTsv = codeTsv ? "" : parseAssistantTablesToTsv();
+      const plainTsv = codeTsv || tableTsv ? "" : parseAssistantPlainTextTsv();
+      const mappingText = codeTsv || tableTsv || plainTsv;
+      sendResponse({ ok: true, mappingText });
+      return;
+    }
+
+    if (message?.type === "FILL_FROM_MAPPING_TEXT") {
+      const mappings = parseMappingText(message.mappingText);
+      if (!mappings.length) throw new Error("No valid mapping rows found.");
+
+      let filled = 0;
+      for (const row of mappings) {
+        const el = evaluateXPath(row.xpath);
+        if (!el) continue;
+        fillField(el, row.value);
+        filled += 1;
+      }
+
+      const submitted = message.autoSubmit ? maybeSubmitForm() : false;
+      sendResponse({ ok: true, filled, total: mappings.length, submitted });
+      return;
+    }
+
+    if (message?.type === "PING_CONTENT") {
+      sendResponse({ ok: true, href: location.href });
+      return;
+    }
+
+    throw new Error("Unsupported message type");
+  })().catch((error) => {
+    sendResponse({ ok: false, error: error.message || String(error) });
+  });
 
   return true;
 });
+
+
+function createManualControlPanel() {
+  if (window.__aiFormButtonsInitialized) return;
+  window.__aiFormButtonsInitialized = true;
+
+  const isChatTab = /(^|\.)chatgpt\.com$/i.test(location.hostname);
+
+  const panel = document.createElement("div");
+  panel.id = "ai-form-helper-panel";
+  panel.style.position = "fixed";
+  panel.style.right = "14px";
+  panel.style.bottom = "14px";
+  panel.style.zIndex = "2147483647";
+  panel.style.background = "#111827";
+  panel.style.color = "#fff";
+  panel.style.padding = "10px";
+  panel.style.borderRadius = "10px";
+  panel.style.fontFamily = "Arial, sans-serif";
+  panel.style.boxShadow = "0 4px 14px rgba(0,0,0,0.25)";
+  panel.style.minWidth = "220px";
+
+  const title = document.createElement("div");
+  title.textContent = "AI Form Helper";
+  title.style.fontSize = "12px";
+  title.style.fontWeight = "700";
+  title.style.marginBottom = "8px";
+  panel.appendChild(title);
+
+  const btnStart = document.createElement("button");
+  btnStart.type = "button";
+  btnStart.textContent = "1) Capture + Ask ChatGPT";
+  btnStart.style.width = "100%";
+  btnStart.style.marginBottom = "6px";
+
+  const btnFill = document.createElement("button");
+  btnFill.type = "button";
+  btnFill.textContent = "2) Fill From ChatGPT Output";
+  btnFill.style.width = "100%";
+
+  const allFieldsWrap = document.createElement("label");
+  allFieldsWrap.style.display = "flex";
+  allFieldsWrap.style.alignItems = "center";
+  allFieldsWrap.style.gap = "6px";
+  allFieldsWrap.style.fontSize = "11px";
+  allFieldsWrap.style.marginBottom = "6px";
+
+  const allFieldsCheckbox = document.createElement("input");
+  allFieldsCheckbox.type = "checkbox";
+  allFieldsCheckbox.checked = true;
+
+  const allFieldsText = document.createElement("span");
+  allFieldsText.textContent = "Capture all fields";
+
+  allFieldsWrap.appendChild(allFieldsCheckbox);
+  allFieldsWrap.appendChild(allFieldsText);
+
+  [btnStart, btnFill].forEach((btn) => {
+    btn.style.border = "0";
+    btn.style.borderRadius = "6px";
+    btn.style.padding = "8px";
+    btn.style.cursor = "pointer";
+    btn.style.fontSize = "12px";
+  });
+
+  if (isChatTab) {
+    btnStart.disabled = true;
+    btnFill.disabled = true;
+    btnStart.style.opacity = "0.6";
+    btnFill.style.opacity = "0.6";
+  }
+
+  const status = document.createElement("div");
+  status.style.fontSize = "11px";
+  status.style.marginTop = "8px";
+  status.style.opacity = "0.95";
+  status.textContent = isChatTab
+    ? "Open a form page to use these buttons."
+    : "Use step 1, then step 2.";
+
+  async function runAction(action, button) {
+    try {
+      button.disabled = true;
+      status.textContent = "Processing...";
+      const resp = await chrome.runtime.sendMessage(action);
+      if (!resp?.ok) throw new Error(resp?.error || resp?.message || "Action failed");
+      status.textContent = resp.message || "Done.";
+    } catch (error) {
+      status.textContent = `Error: ${error.message || String(error)}`;
+    } finally {
+      if (!isChatTab) {
+        btnStart.disabled = false;
+        btnFill.disabled = false;
+      }
+    }
+  }
+
+  btnStart.addEventListener("click", () =>
+    runAction({ type: "MANUAL_CAPTURE_AND_SEND", includeAllFields: allFieldsCheckbox.checked }, btnStart)
+  );
+  btnFill.addEventListener("click", () => runAction({ type: "MANUAL_FILL_FROM_CHATGPT" }, btnFill));
+
+  panel.appendChild(allFieldsWrap);
+  panel.appendChild(btnStart);
+  panel.appendChild(btnFill);
+  panel.appendChild(status);
+  document.documentElement.appendChild(panel);
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", createManualControlPanel, { once: true });
+} else {
+  createManualControlPanel();
+}
