@@ -1,58 +1,35 @@
-# Gmail Auto Sender (Chrome Extension)
+# Resume Assistant Pro (Chrome Extension)
 
-A Manifest V3 extension that automates Gmail compose and sends emails **one-by-one**.
+This project is now packaged as a **Chrome Extension** with a dedicated assistant tab.
 
-## Features
+## What was converted
 
-- Manual Gmail flow automation: **Compose → To → Subject → Body → Attach → Send**.
-- Faster send loop while keeping the same sequence, using short dynamic waits and not blocking long on previous delivery completion.
-- Batch sending, one recipient at a time, with a strict single-compose lock to prevent overlapping sends.
-- Input modes:
-  - Single email form.
-  - Pasted CSV/TSV rows with headers: `to,subject,body[,sent,attach]`.
-  - Google Sheet URL (public CSV export, **no OAuth**).
-- Rich body formatting support:
-  - raw HTML from sheet/body is preserved if provided,
-  - plus `**bold**`, `__underline__`, and `- bullet items` for plain text,
-  - preserves multi-line body text from quoted CSV cells (line breaks kept).
-- Attachment options:
-  - global toggle to send without attachment,
-  - in sheet mode, optional row-level attachment rule from `attach` column (`yes/true/1`).
-- Sheet status handling:
-  - only uses sheet `sent` column to determine unsent rows,
-  - after successful send, tries to write `YES` back to sheet `sent` column.
-- Persistent saved settings:
-  - last mode,
-  - Google Sheet URL,
-  - send limit per run,
-  - attachment toggles.
+- Converted to a tab-based Chrome Extension workflow.
+- Clicking the extension icon opens `assistant.html` (full-page UI).
+- Omnibox keyword `ra` is available from Chrome address bar.
+- Fill actions are sent to the currently tracked job-form tab via `chrome.scripting`.
 
-## How to use
+## Keyboard features (inside assistant tab)
+
+- `ArrowLeft` / `ArrowRight` → toggle categories in order:
+  - `All`, `Personal`, `Contact`, `Address`, `Skills`, `Experience`, `Education`, `Interests`
+- `ArrowUp` / `ArrowDown` → move selection in results
+- `Enter` → copy selected value
+- `Shift+Enter` → fill selected value in target job-form tab
+- `Alt+Q` → focus search box
+
+## Install as Chrome Extension
 
 1. Open `chrome://extensions`.
 2. Enable **Developer mode**.
-3. Click **Load unpacked** and pick this folder.
-4. Open Gmail in a tab and sign in.
-5. Open extension popup and choose input mode.
-6. Set attachment toggle/rule as needed, and choose file only if required.
-7. Click **Send One-by-One**.
+3. Click **Load unpacked**.
+4. Select this repository folder.
+5. Click the extension icon to open Resume Assistant tab.
 
-## Google Sheet mode (no OAuth)
+## Core files used by the extension
 
-- Required columns: `to,subject,body,sent`
-- Optional attachment rule column: `attach`
-  - `yes/true/1` => attachment sent for that row (when global attachment toggle is ON)
-  - blank/other => send without attachment for that row
-- Ensure the sheet is accessible as CSV export (public/published as needed).
-- Paste the Google Sheet URL in popup once; it is saved.
-
-### If you see "Failed to fetch"
-
-- Ensure the sheet is shared/published so CSV export is accessible.
-- Keep a `gid` in the URL when targeting a specific tab.
-- The extension tries multiple CSV endpoints (`/export?format=csv` and `gviz/tq?tqx=out:csv`) automatically.
-
-## Notes
-
-- Gmail may block risky attachment types for security.
-- Use safer file types like PDF/DOC/DOCX/TXT for resumes.
+- `manifest.json`
+- `background.js`
+- `assistant.html`
+- `assistant.css`
+- `assistant.js`

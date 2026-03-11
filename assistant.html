@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Resume Assistant Tab</title>
+    <link rel="stylesheet" href="assistant.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header class="top">
+        <h1>⚡ Resume Assistant</h1>
+        <div class="top-actions">
+          <button id="selectTargetBtn" title="Refresh target job tab">Refresh target</button>
+          <span id="targetInfo"></span>
+        </div>
+      </header>
+
+      <div class="toolbar">
+        <button id="prevCat" title="Left arrow">◀</button>
+        <div id="catBar" class="cats"></div>
+        <button id="nextCat" title="Right arrow">▶</button>
+      </div>
+
+      <input id="search" type="text" placeholder="Search resume data (Alt+Q focus). Left/Right: category • Up/Down: item • Enter: copy • Shift+Enter: fill" autocomplete="off" />
+      <div id="meta" class="meta"></div>
+      <section id="list" class="list" aria-live="polite"></section>
+    </main>
+    <script src="assistant.js"></script>
+  </body>
+</html>
