@@ -15,13 +15,25 @@
         </div>
       </header>
 
+      <section class="editor">
+        <input id="itemLabel" type="text" placeholder="Label (e.g., Current Company)" />
+        <input id="itemValue" type="text" placeholder="Value" />
+        <select id="itemCategory">
+          <option>Personal</option><option>Contact</option><option>Address</option><option>Skills</option>
+          <option>Experience</option><option>Education</option><option>Interests</option>
+        </select>
+        <input id="itemTags" type="text" placeholder="Tags (comma separated)" />
+        <button id="addUpdateBtn">Add Item</button>
+        <button id="clearEditBtn" type="button">Clear</button>
+      </section>
+
       <div class="toolbar">
         <button id="prevCat" title="Left arrow">◀</button>
         <div id="catBar" class="cats"></div>
         <button id="nextCat" title="Right arrow">▶</button>
       </div>
 
-      <input id="search" type="text" placeholder="Search resume data (Alt+Q focus). Left/Right: category • Up/Down: item • Enter: copy • Shift+Enter: fill" autocomplete="off" />
+      <input id="search" type="text" placeholder="Search (Alt+Q). Alt+N: add form • Left/Right: category • Up/Down: item • Enter: copy • Shift+Enter: fill" autocomplete="off" />
       <div id="meta" class="meta"></div>
       <section id="list" class="list" aria-live="polite"></section>
     </main>

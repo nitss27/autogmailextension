@@ -21,7 +21,20 @@ button {
   padding: 8px 12px;
   cursor: pointer;
 }
+input, select {
+  background: #141a22;
+  color: #fff;
+  border: 1px solid #374151;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
 #targetInfo { color: #a1a1aa; font-size: 12px; }
+.editor {
+  display: grid;
+  grid-template-columns: 1.2fr 1.4fr 0.7fr 1fr auto auto;
+  gap: 8px;
+  margin-top: 14px;
+}
 .toolbar { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; margin-top: 16px; }
 .cats { display: flex; flex-wrap: wrap; gap: 8px; }
 .cats button.active { background: #2a5f3e; border-color: #4caf50; }
@@ -31,15 +44,12 @@ button {
   box-sizing: border-box;
   padding: 10px;
   border-radius: 10px;
-  border: 1px solid #374151;
-  background: #141a22;
-  color: #fff;
 }
 .meta { margin: 10px 0; color: #9ca3af; font-size: 13px; }
 .list { display: flex; flex-direction: column; gap: 8px; }
 .item {
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: 1fr auto auto auto auto;
   gap: 8px;
   align-items: center;
   border: 1px solid #2e3644;

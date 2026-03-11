@@ -1,6 +1,7 @@
 const CATEGORIES = ['All', 'Personal', 'Contact', 'Address', 'Skills', 'Experience', 'Education', 'Interests'];
+const STORAGE_KEY = 'resumeAssistantItemsV1';
 
-const DATA = [
+const BASE_DATA = [
   { l: 'Full Name', c: 'Nitesh Shekhawat', category: 'Personal', t: ['name', 'applicant'] },
   { l: 'First Name', c: 'Nitesh', category: 'Personal', t: ['first name'] },
   { l: 'Last Name', c: 'Shekhawat', category: 'Personal', t: ['last name', 'surname'] },
@@ -20,7 +21,7 @@ const DATA = [
   { l: 'Job 3', c: 'Senior Digital Marketing Executive & Marketing Automation Engineer — UBUY, Jaipur', category: 'Experience', t: ['job'] },
   { l: 'Education', c: 'BBA in Entrepreneurship from GCEC (2022)', category: 'Education', t: ['degree'] },
   { l: 'Interests', c: 'Cryptocurrency, stock trends, startup ecosystem, business scaling', category: 'Interests', t: ['hobbies'] },
-].map((item) => ({ ...item, idx: normalize(`${item.l} ${item.c} ${item.category} ${(item.t || []).join(' ')}`) }));
+];
 
 const state = {
   category: 'All',
@@ -28,6 +29,8 @@ const state = {
   selected: 0,
   filtered: [],
   targetTabId: null,
+  data: [],
+  editId: null,
 };
 
 const el = {
@@ -39,33 +42,106 @@ const el = {
   list: document.getElementById('list'),
   targetInfo: document.getElementById('targetInfo'),
   selectTargetBtn: document.getElementById('selectTargetBtn'),
+  itemLabel: document.getElementById('itemLabel'),
+  itemValue: document.getElementById('itemValue'),
+  itemCategory: document.getElementById('itemCategory'),
+  itemTags: document.getElementById('itemTags'),
+  addUpdateBtn: document.getElementById('addUpdateBtn'),
+  clearEditBtn: document.getElementById('clearEditBtn'),
 };
 
 function normalize(v) {
   return String(v || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
 
+function withIndex(item) {
+  return {
+    ...item,
+    id: item.id || crypto.randomUUID(),
+    t: Array.isArray(item.t) ? item.t : [],
+    idx: normalize(`${item.l} ${item.c} ${item.category} ${(item.t || []).join(' ')}`),
+  };
+}
+
 function showToast(message) {
   const toast = document.createElement('div');
   toast.textContent = message;
   Object.assign(toast.style, {
-    position: 'fixed',
-    top: '14px',
-    right: '14px',
-    background: '#2f7f4f',
-    color: '#fff',
-    padding: '8px 12px',
-    borderRadius: '8px',
-    zIndex: 99999,
+    position: 'fixed', top: '14px', right: '14px', background: '#2f7f4f', color: '#fff',
+    padding: '8px 12px', borderRadius: '8px', zIndex: 99999,
   });
   document.body.appendChild(toast);
   setTimeout(() => toast.remove(), 1200);
 }
 
+async function saveItems() {
+  await chrome.storage.local.set({ [STORAGE_KEY]: state.data.map(({ l, c, category, t, id }) => ({ l, c, category, t, id })) });
+}
+
+async function loadItems() {
+  const stored = await chrome.storage.local.get([STORAGE_KEY]);
+  const source = Array.isArray(stored[STORAGE_KEY]) && stored[STORAGE_KEY].length ? stored[STORAGE_KEY] : BASE_DATA;
+  state.data = source.map(withIndex);
+}
+
+function resetEditor() {
+  state.editId = null;
+  el.itemLabel.value = '';
+  el.itemValue.value = '';
+  el.itemCategory.value = 'Personal';
+  el.itemTags.value = '';
+  el.addUpdateBtn.textContent = 'Add Item';
+}
+
+function getEditorItem() {
+  const l = el.itemLabel.value.trim();
+  const c = el.itemValue.value.trim();
+  const category = el.itemCategory.value;
+  const t = el.itemTags.value.split(',').map((x) => x.trim()).filter(Boolean);
+  if (!l || !c || !category) return null;
+  return { l, c, category, t };
+}
+
+function startEdit(item) {
+  state.editId = item.id;
+  el.itemLabel.value = item.l;
+  el.itemValue.value = item.c;
+  el.itemCategory.value = item.category;
+  el.itemTags.value = (item.t || []).join(', ');
+  el.addUpdateBtn.textContent = 'Update Item';
+  el.itemLabel.focus();
+}
+
+async function upsertItem() {
+  const next = getEditorItem();
+  if (!next) return showToast('Label, Value, Category required');
+
+  if (state.editId) {
+    state.data = state.data.map((item) => (item.id === state.editId ? withIndex({ ...item, ...next }) : item));
+    showToast('Item updated');
+  } else {
+    state.data.unshift(withIndex(next));
+    showToast('Item added');
+  }
+
+  await saveItems();
+  resetEditor();
+  state.selected = 0;
+  applyFilters();
+}
+
+async function deleteItem(id) {
+  state.data = state.data.filter((item) => item.id !== id);
+  await saveItems();
+  if (state.editId === id) resetEditor();
+  state.selected = 0;
+  applyFilters();
+  showToast('Item deleted');
+}
+
 async function copyValue(value) {
-  try {
-    await navigator.clipboard.writeText(value);
-  } catch {
+  try { await navigator.clipboard.writeText(value); }
+  catch {
     const ta = document.createElement('textarea');
     ta.value = value;
     document.body.appendChild(ta);
@@ -99,7 +175,7 @@ function renderCategories() {
 
 function renderList() {
   el.list.innerHTML = '';
-  el.meta.textContent = `${state.filtered.length} / ${DATA.length} results • Category: ${state.category}`;
+  el.meta.textContent = `${state.filtered.length} / ${state.data.length} results • Category: ${state.category}`;
 
   state.filtered.forEach((item, index) => {
     const row = document.createElement('div');
@@ -111,12 +187,16 @@ function renderList() {
       </div>
       <button data-action="copy">📋</button>
       <button data-action="fill">↩</button>
+      <button data-action="edit">✏️</button>
+      <button data-action="delete">🗑️</button>
     `;
 
     row.onclick = (event) => {
       const action = event.target?.dataset?.action;
       if (action === 'copy') return copyValue(item.c);
       if (action === 'fill') return fillValue(item.c);
+      if (action === 'edit') return startEdit(item);
+      if (action === 'delete') return deleteItem(item.id);
       copyValue(item.c);
     };
 
@@ -131,7 +211,7 @@ function renderList() {
 
 function applyFilters() {
   const tokens = normalize(state.query).split(/\s+/).filter(Boolean);
-  state.filtered = DATA.filter((item) => {
+  state.filtered = state.data.filter((item) => {
     const categoryOk = state.category === 'All' || item.category === state.category;
     const queryOk = !tokens.length || tokens.every((token) => item.idx.includes(token));
     return categoryOk && queryOk;
@@ -158,17 +238,14 @@ function handleKeys(event) {
     return;
   }
 
-  if (event.key === 'ArrowLeft') {
+  if (event.altKey && event.key.toLowerCase() === 'n') {
     event.preventDefault();
-    cycleCategory(-1);
+    el.itemLabel.focus();
     return;
   }
 
-  if (event.key === 'ArrowRight') {
-    event.preventDefault();
-    cycleCategory(1);
-    return;
-  }
+  if (event.key === 'ArrowLeft') { event.preventDefault(); cycleCategory(-1); return; }
+  if (event.key === 'ArrowRight') { event.preventDefault(); cycleCategory(1); return; }
 
   if (event.key === 'ArrowDown') {
     event.preventDefault();
@@ -187,6 +264,7 @@ function handleKeys(event) {
   if (event.key === 'Enter') {
     const item = state.filtered[state.selected];
     if (!item) return;
+    if (document.activeElement && (document.activeElement === el.itemLabel || document.activeElement === el.itemValue || document.activeElement === el.itemTags)) return;
     event.preventDefault();
     if (event.shiftKey) fillValue(item.c);
     else copyValue(item.c);
@@ -200,6 +278,8 @@ el.search.addEventListener('input', () => {
   state.selected = 0;
   applyFilters();
 });
+el.addUpdateBtn.onclick = upsertItem;
+el.clearEditBtn.onclick = resetEditor;
 
 document.addEventListener('keydown', handleKeys);
 
@@ -214,5 +294,7 @@ el.selectTargetBtn.onclick = async () => {
   const { targetTabId } = await chrome.runtime.sendMessage({ type: 'resume-assistant/get-target-tab' });
   state.targetTabId = targetTabId;
   el.targetInfo.textContent = targetTabId ? `Target tab id: ${targetTabId}` : 'No target tab selected';
+  await loadItems();
+  resetEditor();
   applyFilters();
 })();

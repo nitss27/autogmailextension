@@ -8,6 +8,7 @@ This project is now packaged as a **Chrome Extension** with a dedicated assistan
 - Clicking the extension icon opens `assistant.html` (full-page UI).
 - Omnibox keyword `ra` is available from Chrome address bar.
 - Fill actions are sent to the currently tracked job-form tab via `chrome.scripting`.
+- Add, edit, and delete resume items directly in the assistant tab (saved to extension local storage).
 
 ## Keyboard features (inside assistant tab)
 
@@ -17,6 +18,7 @@ This project is now packaged as a **Chrome Extension** with a dedicated assistan
 - `Enter` → copy selected value
 - `Shift+Enter` → fill selected value in target job-form tab
 - `Alt+Q` → focus search box
+- `Alt+N` → focus add/edit item form
 
 ## Install as Chrome Extension
 
