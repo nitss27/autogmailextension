@@ -48,6 +48,8 @@ const el = {
   itemTags: document.getElementById('itemTags'),
   addUpdateBtn: document.getElementById('addUpdateBtn'),
   clearEditBtn: document.getElementById('clearEditBtn'),
+  csvFile: document.getElementById('csvFile'),
+  importCsvBtn: document.getElementById('importCsvBtn'),
 };
 
 function normalize(v) {
@@ -63,15 +65,15 @@ function withIndex(item) {
   };
 }
 
-function showToast(message) {
+function showToast(message, err = false) {
   const toast = document.createElement('div');
   toast.textContent = message;
   Object.assign(toast.style, {
-    position: 'fixed', top: '14px', right: '14px', background: '#2f7f4f', color: '#fff',
+    position: 'fixed', top: '14px', right: '14px', background: err ? '#9b2c2c' : '#2f7f4f', color: '#fff',
     padding: '8px 12px', borderRadius: '8px', zIndex: 99999,
   });
   document.body.appendChild(toast);
-  setTimeout(() => toast.remove(), 1200);
+  setTimeout(() => toast.remove(), 1400);
 }
 
 async function saveItems() {
@@ -114,7 +116,10 @@ function startEdit(item) {
 
 async function upsertItem() {
   const next = getEditorItem();
-  if (!next) return showToast('Label, Value, Category required');
+  if (!next) {
+    showToast('Label, Value and Category are required', true);
+    return;
+  }
 
   if (state.editId) {
     state.data = state.data.map((item) => (item.id === state.editId ? withIndex({ ...item, ...next }) : item));
@@ -131,12 +136,98 @@ async function upsertItem() {
 }
 
 async function deleteItem(id) {
+  const before = state.data.length;
   state.data = state.data.filter((item) => item.id !== id);
+  if (state.data.length === before) return;
   await saveItems();
   if (state.editId === id) resetEditor();
   state.selected = 0;
   applyFilters();
   showToast('Item deleted');
+}
+
+function parseCsvLine(line) {
+  const values = [];
+  let current = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        current += '"';
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+    if (ch === ',' && !inQuotes) {
+      values.push(current);
+      current = '';
+      continue;
+    }
+    current += ch;
+  }
+  values.push(current);
+  return values;
+}
+
+function importItemsFromCsv(text) {
+  const lines = String(text || '').split(/\r?\n/).filter((line) => line.trim());
+  if (!lines.length) return [];
+
+  const headers = parseCsvLine(lines[0]).map((h) => normalize(h));
+  const idxLabel = headers.indexOf('label');
+  const idxValue = headers.indexOf('value');
+  const idxCategory = headers.indexOf('category');
+  const idxTags = headers.indexOf('tags');
+
+  if (idxLabel < 0 || idxValue < 0 || idxCategory < 0) {
+    throw new Error('CSV must have headers: label,value,category[,tags]');
+  }
+
+  const out = [];
+  lines.slice(1).forEach((line) => {
+    const cols = parseCsvLine(line);
+    const l = String(cols[idxLabel] || '').trim();
+    const c = String(cols[idxValue] || '').trim();
+    const category = String(cols[idxCategory] || '').trim();
+    const tags = String(cols[idxTags] || '').split(',').map((t) => t.trim()).filter(Boolean);
+
+    if (!l || !c || !CATEGORIES.includes(category) || category === 'All') return;
+    out.push(withIndex({ l, c, category, t: tags }));
+  });
+
+  return out;
+}
+
+async function importCsvItems() {
+  const file = el.csvFile.files?.[0];
+  if (!file) {
+    showToast('Choose a CSV file first', true);
+    return;
+  }
+
+  const text = await file.text();
+  let imported = [];
+  try {
+    imported = importItemsFromCsv(text);
+  } catch (error) {
+    showToast(error.message, true);
+    return;
+  }
+
+  if (!imported.length) {
+    showToast('No valid rows in CSV', true);
+    return;
+  }
+
+  state.data = [...imported, ...state.data];
+  await saveItems();
+  applyFilters();
+  el.csvFile.value = '';
+  showToast(`Imported ${imported.length} items`);
 }
 
 async function copyValue(value) {
@@ -155,7 +246,7 @@ async function copyValue(value) {
 async function fillValue(value) {
   const resp = await chrome.runtime.sendMessage({ type: 'resume-assistant/fill-target', value });
   if (resp?.ok) showToast('Fill sent to target tab');
-  else showToast(resp?.error || 'Fill failed');
+  else showToast(resp?.error || 'Fill failed', true);
 }
 
 function renderCategories() {
@@ -164,11 +255,11 @@ function renderCategories() {
     const btn = document.createElement('button');
     btn.textContent = name;
     if (name === state.category) btn.classList.add('active');
-    btn.onclick = () => {
+    btn.addEventListener('click', () => {
       state.category = name;
       state.selected = 0;
       applyFilters();
-    };
+    });
     el.catBar.appendChild(btn);
   });
 }
@@ -180,30 +271,51 @@ function renderList() {
   state.filtered.forEach((item, index) => {
     const row = document.createElement('div');
     row.className = `item ${index === state.selected ? 'active' : ''}`;
-    row.innerHTML = `
-      <div>
-        <div class="label">${item.l}</div>
-        <div class="value">${item.c}</div>
-      </div>
-      <button data-action="copy">📋</button>
-      <button data-action="fill">↩</button>
-      <button data-action="edit">✏️</button>
-      <button data-action="delete">🗑️</button>
-    `;
 
-    row.onclick = (event) => {
-      const action = event.target?.dataset?.action;
-      if (action === 'copy') return copyValue(item.c);
-      if (action === 'fill') return fillValue(item.c);
-      if (action === 'edit') return startEdit(item);
-      if (action === 'delete') return deleteItem(item.id);
+    const info = document.createElement('div');
+    info.innerHTML = `<div class="label"></div><div class="value"></div>`;
+    info.querySelector('.label').textContent = item.l;
+    info.querySelector('.value').textContent = item.c;
+
+    const copyBtn = document.createElement('button');
+    copyBtn.textContent = '📋';
+    copyBtn.title = 'Copy';
+    copyBtn.addEventListener('click', (event) => {
+      event.stopPropagation();
       copyValue(item.c);
-    };
+    });
 
-    row.onmouseenter = () => {
+    const fillBtn = document.createElement('button');
+    fillBtn.textContent = '↩';
+    fillBtn.title = 'Fill';
+    fillBtn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      fillValue(item.c);
+    });
+
+    const editBtn = document.createElement('button');
+    editBtn.textContent = '✏️';
+    editBtn.title = 'Edit';
+    editBtn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      startEdit(item);
+    });
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.textContent = '🗑️';
+    deleteBtn.title = 'Delete';
+    deleteBtn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      deleteItem(item.id);
+    });
+
+    row.append(info, copyBtn, fillBtn, editBtn, deleteBtn);
+
+    row.addEventListener('mouseenter', () => {
       state.selected = index;
       renderList();
-    };
+    });
+    row.addEventListener('click', () => copyValue(item.c));
 
     el.list.appendChild(row);
   });
@@ -228,6 +340,10 @@ function cycleCategory(dir) {
   state.category = CATEGORIES[nextIdx];
   state.selected = 0;
   applyFilters();
+}
+
+function isEditorFocused() {
+  return [el.itemLabel, el.itemValue, el.itemCategory, el.itemTags].includes(document.activeElement);
 }
 
 function handleKeys(event) {
@@ -262,33 +378,34 @@ function handleKeys(event) {
   }
 
   if (event.key === 'Enter') {
+    if (isEditorFocused()) return;
     const item = state.filtered[state.selected];
     if (!item) return;
-    if (document.activeElement && (document.activeElement === el.itemLabel || document.activeElement === el.itemValue || document.activeElement === el.itemTags)) return;
     event.preventDefault();
     if (event.shiftKey) fillValue(item.c);
     else copyValue(item.c);
   }
 }
 
-el.prevCat.onclick = () => cycleCategory(-1);
-el.nextCat.onclick = () => cycleCategory(1);
+el.prevCat.addEventListener('click', () => cycleCategory(-1));
+el.nextCat.addEventListener('click', () => cycleCategory(1));
 el.search.addEventListener('input', () => {
   state.query = el.search.value;
   state.selected = 0;
   applyFilters();
 });
-el.addUpdateBtn.onclick = upsertItem;
-el.clearEditBtn.onclick = resetEditor;
+el.addUpdateBtn.addEventListener('click', upsertItem);
+el.clearEditBtn.addEventListener('click', resetEditor);
+el.importCsvBtn.addEventListener('click', importCsvItems);
 
 document.addEventListener('keydown', handleKeys);
 
-el.selectTargetBtn.onclick = async () => {
+el.selectTargetBtn.addEventListener('click', async () => {
   const { targetTabId } = await chrome.runtime.sendMessage({ type: 'resume-assistant/get-target-tab' });
   state.targetTabId = targetTabId;
   el.targetInfo.textContent = targetTabId ? `Target tab id: ${targetTabId}` : 'No target tab selected';
-  showToast(targetTabId ? 'Target refreshed' : 'No target tab selected');
-};
+  showToast(targetTabId ? 'Target refreshed' : 'No target tab selected', !targetTabId);
+});
 
 (async function init() {
   const { targetTabId } = await chrome.runtime.sendMessage({ type: 'resume-assistant/get-target-tab' });

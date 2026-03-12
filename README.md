@@ -9,6 +9,7 @@ This project is now packaged as a **Chrome Extension** with a dedicated assistan
 - Omnibox keyword `ra` is available from Chrome address bar.
 - Fill actions are sent to the currently tracked job-form tab via `chrome.scripting`.
 - Add, edit, and delete resume items directly in the assistant tab (saved to extension local storage).
+- Import multiple items from CSV (`label,value,category,tags`) in one click.
 
 ## Keyboard features (inside assistant tab)
 

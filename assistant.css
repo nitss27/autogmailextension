@@ -35,6 +35,18 @@ input, select {
   gap: 8px;
   margin-top: 14px;
 }
+
+.csv-import {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 10px;
+}
+.csv-import .hint {
+  color: #9ca3af;
+  font-size: 12px;
+}
+
 .toolbar { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; margin-top: 16px; }
 .cats { display: flex; flex-wrap: wrap; gap: 8px; }
 .cats button.active { background: #2a5f3e; border-color: #4caf50; }

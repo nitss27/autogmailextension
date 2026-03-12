@@ -23,8 +23,14 @@
           <option>Experience</option><option>Education</option><option>Interests</option>
         </select>
         <input id="itemTags" type="text" placeholder="Tags (comma separated)" />
-        <button id="addUpdateBtn">Add Item</button>
+        <button id="addUpdateBtn" type="button">Add Item</button>
         <button id="clearEditBtn" type="button">Clear</button>
+      </section>
+
+      <section class="csv-import">
+        <input id="csvFile" type="file" accept=".csv,text/csv" />
+        <button id="importCsvBtn" type="button">Import CSV</button>
+        <span class="hint">CSV headers: <code>label,value,category,tags</code></span>
       </section>
 
       <div class="toolbar">
