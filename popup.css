@@ -27,11 +27,13 @@ label {
   font-weight: 600;
 }
 
+input,
 textarea,
 button {
   font: inherit;
 }
 
+input,
 textarea {
   width: 100%;
   box-sizing: border-box;

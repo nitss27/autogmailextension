@@ -23,8 +23,16 @@ function normalizeLinkedInCompanyUrl(rawUrl) {
 
 function getJobCards() {
   return Array.from(
-    document.querySelectorAll('.job-card-container[data-job-id], .jobs-search-results-list__list-item .job-card-container')
+    document.querySelectorAll('.job-card-container[data-job-id], .jobs-search-results-list__list-item .job-card-container[data-job-id]')
   );
+}
+
+function getJobId(card) {
+  return card?.getAttribute("data-job-id") || "";
+}
+
+function getListContainer() {
+  return document.querySelector(".jobs-search-results-list") || document.querySelector(".scaffold-layout__list-container");
 }
 
 function clickCard(card) {
@@ -33,12 +41,15 @@ function clickCard(card) {
   clickTarget.click();
 }
 
-function collectCompanyAnchors() {
-  const anchors = Array.from(
-    document.querySelectorAll(
-      'a[href*="/company/"] , .jobs-search__job-details--container a[href*="/company/"], .job-details-jobs-unified-top-card__company-name a'
+function collectCompanyAnchors(card) {
+  const anchors = [
+    ...(card ? Array.from(card.querySelectorAll('a[href*="/company/"]')) : []),
+    ...Array.from(
+      document.querySelectorAll(
+        '.jobs-search__job-details--container a[href*="/company/"], .job-details-jobs-unified-top-card__company-name a, a[href*="/company/"]'
+      )
     )
-  );
+  ];
 
   const urls = new Set();
   anchors.forEach((a) => {
@@ -49,48 +60,87 @@ function collectCompanyAnchors() {
   return urls;
 }
 
-async function fetchAllCompanyUrlsFromJobList() {
-  const companyUrls = new Set();
-  let stableRounds = 0;
+async function scrollJobListToEnd() {
+  const container = getListContainer();
+  if (!container) return;
 
-  for (let round = 0; round < 20; round += 1) {
+  let lastTop = -1;
+  let stable = 0;
+
+  while (stable < 3) {
+    container.scrollTop = container.scrollHeight;
+    await sleep(700);
+
+    if (container.scrollTop === lastTop) {
+      stable += 1;
+    } else {
+      stable = 0;
+      lastTop = container.scrollTop;
+    }
+  }
+}
+
+async function clickNextPageIfAvailable() {
+  const nextBtn = document.querySelector(
+    'button.jobs-search-pagination__button--next[aria-label*="View next page"], button.jobs-search-pagination__button--next'
+  );
+
+  if (!nextBtn || nextBtn.disabled || nextBtn.getAttribute("aria-disabled") === "true") {
+    return false;
+  }
+
+  const firstCardIdBefore = getJobId(getJobCards()[0]);
+  nextBtn.click();
+
+  for (let i = 0; i < 20; i += 1) {
+    await sleep(350);
+    const firstCardIdAfter = getJobId(getJobCards()[0]);
+    if (firstCardIdAfter && firstCardIdAfter !== firstCardIdBefore) {
+      return true;
+    }
+  }
+
+  return true;
+}
+
+async function fetchAllCompanyUrlsFromJobList(listingTarget = 25) {
+  const companyUrls = new Set();
+  const seenJobIds = new Set();
+  let pagesVisited = 0;
+  const maxPages = 40;
+
+  while (seenJobIds.size < listingTarget && pagesVisited < maxPages) {
+    pagesVisited += 1;
+
+    await scrollJobListToEnd();
     const cards = getJobCards();
 
-    for (let i = 0; i < cards.length; i += 1) {
-      const card = cards[i];
+    for (const card of cards) {
+      if (seenJobIds.size >= listingTarget) break;
+
+      const jobId = getJobId(card);
+      if (jobId && seenJobIds.has(jobId)) continue;
+
       clickCard(card);
       await sleep(250);
 
-      const inCardAnchor = card.querySelector('a[href*="/company/"]');
-      const normalized = normalizeLinkedInCompanyUrl(inCardAnchor?.href);
-      if (normalized) companyUrls.add(normalized);
-
-      collectCompanyAnchors().forEach((url) => companyUrls.add(url));
+      if (jobId) seenJobIds.add(jobId);
+      collectCompanyAnchors(card).forEach((url) => companyUrls.add(url));
     }
 
-    const beforeScrollCount = cards.length;
-    const listContainer =
-      document.querySelector(".jobs-search-results-list") || document.querySelector(".scaffold-layout__list-container");
+    if (seenJobIds.size >= listingTarget) break;
 
-    if (listContainer) {
-      listContainer.scrollTop = listContainer.scrollHeight;
-    } else {
-      window.scrollTo(0, document.body.scrollHeight);
-    }
+    const movedToNextPage = await clickNextPageIfAvailable();
+    if (!movedToNextPage) break;
 
-    await sleep(800);
-
-    const afterScrollCount = getJobCards().length;
-    if (afterScrollCount <= beforeScrollCount) {
-      stableRounds += 1;
-    } else {
-      stableRounds = 0;
-    }
-
-    if (stableRounds >= 2) break;
+    await sleep(900);
   }
 
-  return Array.from(companyUrls);
+  return {
+    companyUrls: Array.from(companyUrls),
+    listingsProcessed: seenJobIds.size,
+    pagesVisited
+  };
 }
 
 function extractCompanyDataFromCurrentPage() {
@@ -136,8 +186,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === "FETCH_ALL_COMPANY_URLS") {
     (async () => {
-      const companyUrls = await fetchAllCompanyUrlsFromJobList();
-      sendResponse({ ok: true, companyUrls });
+      const listingTarget = Number.parseInt(message.payload?.listingTarget, 10) || 25;
+      const data = await fetchAllCompanyUrlsFromJobList(listingTarget);
+      sendResponse({ ok: true, ...data });
     })().catch((error) => {
       sendResponse({ ok: false, error: error.message || "Failed to collect company URLs" });
     });

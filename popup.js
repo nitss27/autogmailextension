@@ -2,6 +2,7 @@ const fetchBtn = document.getElementById("fetchBtn");
 const processBtn = document.getElementById("processBtn");
 const copyBtn = document.getElementById("copyBtn");
 const clearBtn = document.getElementById("clearBtn");
+const listingTargetEl = document.getElementById("listingTarget");
 const urlsBox = document.getElementById("urlsBox");
 const resultsBody = document.getElementById("resultsBody");
 const statusEl = document.getElementById("status");
@@ -24,6 +25,14 @@ function parseUrlsFromBox() {
     .split(/\r?\n/)
     .map((v) => v.trim())
     .filter(Boolean);
+}
+
+function getListingTarget() {
+  const parsed = Number.parseInt(listingTargetEl.value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error("Enter a valid listing count greater than 0.");
+  }
+  return parsed;
 }
 
 function escapeHtml(value) {
@@ -95,15 +104,23 @@ fetchBtn.addEventListener("click", async () => {
   try {
     fetchBtn.disabled = true;
     processBtn.disabled = true;
-    setStatus("Scanning job list and clicking each card to collect all company links...");
+
+    const listingTarget = getListingTarget();
+    setStatus(`Fetching companies from up to ${listingTarget} listings (scroll + Next pagination)...`);
 
     const tabId = await getActiveTabId();
-    const response = await chrome.tabs.sendMessage(tabId, { type: "FETCH_ALL_COMPANY_URLS" });
+    const response = await chrome.tabs.sendMessage(tabId, {
+      type: "FETCH_ALL_COMPANY_URLS",
+      payload: { listingTarget }
+    });
+
     if (!response?.ok) throw new Error(response?.error || "Failed to fetch links");
 
     latestCompanyUrls = response.companyUrls || [];
     urlsBox.value = latestCompanyUrls.join("\n");
-    setStatus(`Fetched ${latestCompanyUrls.length} unique company URLs from the list.`);
+    setStatus(
+      `Fetched ${latestCompanyUrls.length} unique company URLs from ${response.listingsProcessed || 0} listings across ${response.pagesVisited || 1} pages.`
+    );
   } catch (error) {
     setStatus(`Fetch failed: ${error.message}`);
   } finally {

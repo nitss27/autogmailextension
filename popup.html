@@ -8,7 +8,10 @@
   <body>
     <main>
       <h1>LinkedIn Company Extractor</h1>
-      <p class="hint">Fetch all companies from visible job list, then open each company in a new tab and extract details.</p>
+      <p class="hint">Scroll to end, paginate with Next, and fetch companies until your listing target is met.</p>
+
+      <label for="listingTarget">Number of listings to fetch</label>
+      <input id="listingTarget" type="number" min="1" step="1" value="25" />
 
       <div class="actions">
         <button id="fetchBtn">Fetch All Companies</button>

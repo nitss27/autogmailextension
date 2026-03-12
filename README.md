@@ -1,18 +1,21 @@
 # LinkedIn Company Extractor (Chrome Extension)
 
-This Chrome Extension helps you collect companies from LinkedIn Jobs and then extract each company profile's About information.
+This extension collects company URLs from LinkedIn Jobs, then opens each company profile About page and extracts fields into a table.
 
 ## Workflow
 
 1. Open LinkedIn Jobs search results.
-2. Click **Fetch All Companies** in the extension popup.
-   - The extension clicks through the visible job cards in the list.
-   - It keeps scrolling the list to load more cards and collects unique company URLs.
-3. Click **Process Company Profiles**.
-   - The extension opens each company About page (`/company/<slug>/about/`) in a new background tab.
-   - It extracts details and closes the tab automatically.
-4. Review results in the popup table.
-5. Click **Copy Table (TSV)** to copy all rows.
+2. Enter **Number of listings to fetch** in popup.
+3. Click **Fetch All Companies**:
+   - scrolls the job list to the end of current page,
+   - clicks job cards to gather company URLs,
+   - clicks **Next** page button and repeats,
+   - stops once target listing count is reached (or no next page).
+4. Click **Process Company Profiles**:
+   - opens each company `/about/` page in a background tab,
+   - extracts company fields,
+   - closes tab and moves to next company.
+5. Review table and use **Copy Table (TSV)**.
 
 ## Extracted fields
 
@@ -26,15 +29,8 @@ This Chrome Extension helps you collect companies from LinkedIn Jobs and then ex
 - Verified Page
 - Status
 
-## Setup
-
-1. Open `chrome://extensions`.
-2. Enable **Developer mode**.
-3. Click **Load unpacked** and select this project folder.
-4. Open LinkedIn Jobs and run the extension.
-
 ## Notes
 
-- You must be logged in to LinkedIn in that Chrome profile.
+- You must be logged in to LinkedIn.
 - LinkedIn UI changes can require selector updates.
-- Some rows can return `error` status when data is unavailable or access is restricted.
+- Some rows may return `error` status due to access limits or missing data.
