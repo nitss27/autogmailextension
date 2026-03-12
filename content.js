@@ -22,11 +22,17 @@ function normalizeLinkedInCompanyUrl(rawUrl) {
 }
 
 function getJobCards() {
-  return Array.from(document.querySelectorAll('.job-card-container[data-job-id], li[data-occludable-job-id] .job-card-container'));
+  return Array.from(
+    document.querySelectorAll(
+      '.job-card-container[data-job-id], li[data-occludable-job-id] .job-card-container, .jobs-search-results-list__list-item [data-job-id]'
+    )
+  );
 }
 
 function getCardKey(card, index) {
-  const jobId = card?.getAttribute("data-job-id") || card?.closest("li[data-occludable-job-id]")?.getAttribute("data-occludable-job-id");
+  const fromCard = card?.getAttribute("data-job-id");
+  const fromParent = card?.closest("li[data-occludable-job-id]")?.getAttribute("data-occludable-job-id");
+  const jobId = fromCard || fromParent;
   if (jobId) return `job:${jobId}`;
 
   const title = card?.querySelector("a.job-card-list__title--link")?.textContent?.trim() || "untitled";
@@ -48,20 +54,35 @@ function getListContainer() {
     parent = parent.parentElement;
   }
 
-  return document.scrollingElement || document.documentElement;
+  return null;
 }
 
 function clickElement(el) {
   if (!el) return;
   el.scrollIntoView({ behavior: "instant", block: "center" });
+  el.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
   el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
   el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
   el.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 }
 
-function clickCard(card) {
-  const target = card.querySelector("a.job-card-list__title--link") || card;
-  clickElement(target);
+function activateCard(card) {
+  const targetSelectors = [
+    "a.job-card-list__title--link",
+    "a.job-card-container__link",
+    '[role="button"]',
+    ".job-card-container__link"
+  ];
+
+  for (const selector of targetSelectors) {
+    const el = card.querySelector(selector);
+    if (el) {
+      clickElement(el);
+      return;
+    }
+  }
+
+  clickElement(card);
 }
 
 function collectCompanyAnchors(card) {
@@ -83,13 +104,13 @@ function collectCompanyAnchors(card) {
   return urls;
 }
 
-async function collectAfterCardClick(card, rounds = 5) {
+async function collectAfterCardClick(card, rounds = 10) {
   const urls = new Set();
 
   for (let i = 0; i < rounds; i += 1) {
     collectCompanyAnchors(card).forEach((url) => urls.add(url));
     if (urls.size > 0) break;
-    await sleep(220);
+    await sleep(250);
   }
 
   return urls;
@@ -98,28 +119,33 @@ async function collectAfterCardClick(card, rounds = 5) {
 async function scrollJobListToEnd() {
   const container = getListContainer();
   let stable = 0;
-  let lastScrollTop = -1;
+  let lastPos = -1;
 
-  while (stable < 4) {
-    const currentTop = container.scrollTop;
-    const nextTop = Math.min(container.scrollHeight, currentTop + Math.max(500, container.clientHeight * 0.9));
-    container.scrollTop = nextTop;
+  while (stable < 5) {
+    if (container) {
+      const current = container.scrollTop;
+      const next = Math.min(container.scrollHeight, current + Math.max(500, container.clientHeight || 600));
+      container.scrollTop = next;
+    } else {
+      const y = window.scrollY;
+      window.scrollTo(0, y + Math.max(700, window.innerHeight * 0.8));
+    }
 
-    await sleep(400);
+    await sleep(450);
 
-    const updatedTop = container.scrollTop;
-    if (updatedTop === lastScrollTop || updatedTop === currentTop) {
+    const pos = container ? container.scrollTop : window.scrollY;
+    if (pos === lastPos) {
       stable += 1;
     } else {
       stable = 0;
-      lastScrollTop = updatedTop;
+      lastPos = pos;
     }
   }
 }
 
 async function clickNextPageIfAvailable() {
   const nextBtn = document.querySelector(
-    'button.jobs-search-pagination__button--next[aria-label*="View next page"], button.jobs-search-pagination__button--next'
+    'button.jobs-search-pagination__button--next[aria-label*="View next page"], button.jobs-search-pagination__button--next, button[aria-label="View next page"]'
   );
 
   if (!nextBtn || nextBtn.disabled || nextBtn.getAttribute("aria-disabled") === "true") {
@@ -129,15 +155,13 @@ async function clickNextPageIfAvailable() {
   const firstBefore = getCardKey(getJobCards()[0], 0);
   clickElement(nextBtn);
 
-  for (let i = 0; i < 30; i += 1) {
+  for (let i = 0; i < 35; i += 1) {
     await sleep(300);
     const firstAfter = getCardKey(getJobCards()[0], 0);
-    if (firstAfter && firstAfter !== firstBefore) {
-      return true;
-    }
+    if (firstAfter && firstAfter !== firstBefore) return true;
   }
 
-  return getJobCards().length > 0;
+  return false;
 }
 
 async function fetchAllCompanyUrlsFromJobList(listingTarget = 25) {
@@ -148,7 +172,6 @@ async function fetchAllCompanyUrlsFromJobList(listingTarget = 25) {
 
   while (seenCardKeys.size < listingTarget && pagesVisited < maxPages) {
     pagesVisited += 1;
-
     await scrollJobListToEnd();
 
     const cards = getJobCards();
@@ -159,8 +182,8 @@ async function fetchAllCompanyUrlsFromJobList(listingTarget = 25) {
       const cardKey = getCardKey(card, i);
       if (seenCardKeys.has(cardKey)) continue;
 
-      clickCard(card);
-      await sleep(280);
+      activateCard(card);
+      await sleep(320);
 
       const foundUrls = await collectAfterCardClick(card);
       foundUrls.forEach((url) => companyUrls.add(url));
@@ -172,7 +195,7 @@ async function fetchAllCompanyUrlsFromJobList(listingTarget = 25) {
     const movedToNextPage = await clickNextPageIfAvailable();
     if (!movedToNextPage) break;
 
-    await sleep(1000);
+    await sleep(1200);
   }
 
   return {
