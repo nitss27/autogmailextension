@@ -1,22 +1,25 @@
 {
   "manifest_version": 3,
-  "name": "Gmail Auto Sender",
-  "version": "1.0.0",
-  "description": "Send Gmail messages one-by-one from form, pasted rows, or a Google Sheet CSV without OAuth.",
-  "permissions": ["activeTab", "scripting", "storage", "tabs"],
-  "host_permissions": ["https://mail.google.com/*", "https://docs.google.com/*"],
+  "name": "Resume Assistant Pro",
+  "version": "1.1.0",
+  "description": "Chrome extension for resume copy/fill with a full assistant tab and omnibox search.",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage",
+    "tabs",
+    "omnibox"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
   "background": {
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "Gmail Auto Sender",
-    "default_popup": "popup.html"
+    "default_title": "Open Resume Assistant tab"
   },
-  "content_scripts": [
-    {
-      "matches": ["https://mail.google.com/*"],
-      "js": ["content.js"],
-      "run_at": "document_idle"
-    }
-  ]
+  "omnibox": {
+    "keyword": "ra"
+  }
 }
