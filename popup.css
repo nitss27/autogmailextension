@@ -1,6 +1,6 @@
 body {
   font-family: Arial, sans-serif;
-  width: 420px;
+  width: 900px;
   margin: 0;
   padding: 12px;
 }
@@ -48,6 +48,33 @@ textarea {
 button {
   padding: 8px;
   cursor: pointer;
+}
+
+.table-wrap {
+  overflow: auto;
+  max-height: 340px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+th,
+td {
+  border-bottom: 1px solid #eee;
+  padding: 6px;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  position: sticky;
+  top: 0;
+  background: #fafafa;
 }
 
 #status {

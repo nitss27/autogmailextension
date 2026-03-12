@@ -8,19 +8,39 @@
   <body>
     <main>
       <h1>LinkedIn Company Extractor</h1>
-      <p class="hint">1) Fetch company URLs from job cards, 2) process company profiles, 3) copy output.</p>
+      <p class="hint">Fetch all companies from visible job list, then open each company in a new tab and extract details.</p>
 
       <div class="actions">
-        <button id="fetchBtn">Fetch Company URLs</button>
+        <button id="fetchBtn">Fetch All Companies</button>
         <button id="processBtn">Process Company Profiles</button>
       </div>
 
-      <label for="output">Results (JSON)</label>
-      <textarea id="output" rows="14" placeholder="Results will appear here..."></textarea>
+      <label for="urlsBox">Company profile URLs</label>
+      <textarea id="urlsBox" rows="6" placeholder="https://www.linkedin.com/company/...\n..."></textarea>
 
       <div class="actions">
-        <button id="copyBtn" type="button">Copy All</button>
+        <button id="copyBtn" type="button">Copy Table (TSV)</button>
         <button id="clearBtn" type="button">Clear</button>
+      </div>
+
+      <div class="table-wrap">
+        <table id="resultsTable">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Company</th>
+              <th>LinkedIn URL</th>
+              <th>Website</th>
+              <th>Industry</th>
+              <th>Company Size</th>
+              <th>Headquarters</th>
+              <th>Specialties</th>
+              <th>Verified Page</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="resultsBody"></tbody>
+        </table>
       </div>
 
       <pre id="status"></pre>
