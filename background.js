@@ -1,3 +1,3 @@
 chrome.runtime.onInstalled.addListener(() => {
-  console.log("Gmail Auto Sender installed");
+  console.log("LinkedIn Company Extractor installed");
 });

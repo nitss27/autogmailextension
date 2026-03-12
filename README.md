@@ -1,58 +1,38 @@
-# Gmail Auto Sender (Chrome Extension)
+# LinkedIn Company Extractor (Chrome Extension)
 
-A Manifest V3 extension that automates Gmail compose and sends emails **one-by-one**.
+A Manifest V3 extension that helps you:
+
+1. Collect company profile URLs from LinkedIn Jobs listings/cards.
+2. Process each company profile (About page) to extract business information.
+3. View all extracted output in the popup and copy everything in one click.
 
 ## Features
 
-- Manual Gmail flow automation: **Compose → To → Subject → Body → Attach → Send**.
-- Faster send loop while keeping the same sequence, using short dynamic waits and not blocking long on previous delivery completion.
-- Batch sending, one recipient at a time, with a strict single-compose lock to prevent overlapping sends.
-- Input modes:
-  - Single email form.
-  - Pasted CSV/TSV rows with headers: `to,subject,body[,sent,attach]`.
-  - Google Sheet URL (public CSV export, **no OAuth**).
-- Rich body formatting support:
-  - raw HTML from sheet/body is preserved if provided,
-  - plus `**bold**`, `__underline__`, and `- bullet items` for plain text,
-  - preserves multi-line body text from quoted CSV cells (line breaks kept).
-- Attachment options:
-  - global toggle to send without attachment,
-  - in sheet mode, optional row-level attachment rule from `attach` column (`yes/true/1`).
-- Sheet status handling:
-  - only uses sheet `sent` column to determine unsent rows,
-  - after successful send, tries to write `YES` back to sheet `sent` column.
-- Persistent saved settings:
-  - last mode,
-  - Google Sheet URL,
-  - send limit per run,
-  - attachment toggles.
+- Fetches company links from current LinkedIn jobs page cards.
+- Attempts to click visible job cards first, then reads company anchors.
+- Processes each company URL and loads `/about/` data.
+- Extracts fields such as:
+  - Website
+  - Industry
+  - Company size
+  - Headquarters
+  - Specialties
+  - Verified page date (when available)
+- Shows results in popup JSON output box.
+- Includes **Copy All** button.
 
 ## How to use
 
 1. Open `chrome://extensions`.
-2. Enable **Developer mode**.
-3. Click **Load unpacked** and pick this folder.
-4. Open Gmail in a tab and sign in.
-5. Open extension popup and choose input mode.
-6. Set attachment toggle/rule as needed, and choose file only if required.
-7. Click **Send One-by-One**.
-
-## Google Sheet mode (no OAuth)
-
-- Required columns: `to,subject,body,sent`
-- Optional attachment rule column: `attach`
-  - `yes/true/1` => attachment sent for that row (when global attachment toggle is ON)
-  - blank/other => send without attachment for that row
-- Ensure the sheet is accessible as CSV export (public/published as needed).
-- Paste the Google Sheet URL in popup once; it is saved.
-
-### If you see "Failed to fetch"
-
-- Ensure the sheet is shared/published so CSV export is accessible.
-- Keep a `gid` in the URL when targeting a specific tab.
-- The extension tries multiple CSV endpoints (`/export?format=csv` and `gviz/tq?tqx=out:csv`) automatically.
+2. Turn on **Developer mode**.
+3. Click **Load unpacked** and select this folder.
+4. Open a LinkedIn Jobs page where job cards are visible.
+5. Open extension popup and click **Fetch Company URLs**.
+6. Click **Process Company Profiles**.
+7. Review results in output box and click **Copy All** if needed.
 
 ## Notes
 
-- Gmail may block risky attachment types for security.
-- Use safer file types like PDF/DOC/DOCX/TXT for resumes.
+- You must be logged in to LinkedIn in the browser profile where extension runs.
+- If LinkedIn limits or blocks requests, some profiles may return errors; these are included in output.
+- Selectors are designed to be resilient, but LinkedIn UI changes may require updates.
