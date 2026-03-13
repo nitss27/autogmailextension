@@ -2,6 +2,10 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function textOf(el) {
+  return el?.textContent?.replace(/\s+/g, " ").trim() || "";
+}
+
 function normalizeLinkedInCompanyUrl(rawUrl) {
   if (!rawUrl) return null;
 
@@ -75,34 +79,64 @@ function activateCard(card) {
   clickElement(target);
 }
 
-function collectCompanyAnchors(card) {
-  const anchors = [
-    ...(card ? Array.from(card.querySelectorAll('a[href*="/company/"]')) : []),
-    ...Array.from(
-      document.querySelectorAll(
-        'a[href*="/company/"], .jobs-search__job-details--container a[href*="/company/"], .job-details-jobs-unified-top-card__company-name a, .jobs-unified-top-card__company-name a, a._40fe5d9f[href*="/company/"]'
-      )
-    )
-  ];
+function extractJobDetails(card) {
+  const pane = document.querySelector('.jobs-search__job-details--container, [data-view-name="job-details"], main');
 
-  const urls = new Set();
-  for (const a of anchors) {
-    const normalized = normalizeLinkedInCompanyUrl(a.href);
-    if (normalized) urls.add(normalized);
-  }
-  return urls;
+  const jobTitle =
+    textOf(pane?.querySelector('a[href*="/jobs/view/"]')) ||
+    textOf(card.querySelector('a.job-card-list__title--link, a[href*="/jobs/view/"]'));
+
+  const jobUrlRaw =
+    pane?.querySelector('a[href*="/jobs/view/"]')?.href ||
+    card.querySelector('a[href*="/jobs/view/"]')?.href ||
+    "";
+  const jobUrl = jobUrlRaw ? new URL(jobUrlRaw, window.location.origin).href : "";
+
+  const companyAnchor =
+    pane?.querySelector('a[href*="/company/"]') ||
+    card.querySelector('a[href*="/company/"]');
+
+  const companyProfileUrl = normalizeLinkedInCompanyUrl(companyAnchor?.href || "") || "";
+  const companyDisplayName = textOf(companyAnchor) || textOf(card.querySelector('p a[href*="/company/"]'));
+
+  const metaLine =
+    textOf(pane?.querySelector("p.ba8b842d._6ae9bfc9")) ||
+    textOf(card.querySelector(".job-card-container__metadata-wrapper"));
+
+  const applicantsText =
+    textOf(pane?.querySelector("p.ba8b842d._6ae9bfc9.d051f947")) ||
+    (metaLine.includes("applicant") ? metaLine : "");
+
+  const chips = Array.from(pane?.querySelectorAll('a[href*="jobs/search-results"], span') || []).map((el) => textOf(el));
+  const workType = chips.find((v) => /on-site|remote|hybrid/i.test(v)) || "";
+  const employmentType = chips.find((v) => /full-time|part-time|contract|internship|temporary/i.test(v)) || "";
+  const postedTime = chips.find((v) => /hour|day|week|month|ago/i.test(v)) || "";
+  const easyApply = chips.some((v) => /easy apply/i.test(v)) || !!pane?.querySelector('[aria-label*="Easy Apply"]');
+
+  return {
+    jobTitle,
+    jobUrl,
+    companyDisplayName,
+    companyProfileUrl,
+    location: metaLine,
+    postedTime,
+    applicants: applicantsText,
+    workType,
+    employmentType,
+    easyApply: easyApply ? "Yes" : "No"
+  };
 }
 
 async function collectAfterCardClick(card, rounds = 12) {
-  const urls = new Set();
+  let details = null;
 
   for (let i = 0; i < rounds; i += 1) {
-    collectCompanyAnchors(card).forEach((url) => urls.add(url));
-    if (urls.size > 0) break;
+    details = extractJobDetails(card);
+    if (details.companyProfileUrl || details.jobTitle) break;
     await sleep(250);
   }
 
-  return urls;
+  return details || extractJobDetails(card);
 }
 
 async function scrollJobListToEnd() {
@@ -112,9 +146,6 @@ async function scrollJobListToEnd() {
 
   while (stable < 5) {
     if (container) {
-      // requested behavior:
-      // let container = document.querySelector('[data-testid="lazy-column"]');
-      // container.scrollTop = container.scrollHeight;
       container.scrollTop = container.scrollHeight;
     } else {
       window.scrollTo(0, document.body.scrollHeight);
@@ -170,18 +201,18 @@ async function clickNextPageIfAvailable() {
 
 async function fetchAllCompanyUrlsFromJobList(listingTarget = 25) {
   const companyUrls = new Set();
+  const listings = [];
   const seenCardKeys = new Set();
   let pagesVisited = 0;
   const maxPages = 50;
 
-  while (seenCardKeys.size < listingTarget && pagesVisited < maxPages) {
+  while (listings.length < listingTarget && pagesVisited < maxPages) {
     pagesVisited += 1;
-
     await scrollJobListToEnd();
 
     const cards = getJobCards();
     for (let i = 0; i < cards.length; i += 1) {
-      if (seenCardKeys.size >= listingTarget) break;
+      if (listings.length >= listingTarget) break;
 
       const card = cards[i];
       const cardKey = getCardKey(card, i);
@@ -190,12 +221,19 @@ async function fetchAllCompanyUrlsFromJobList(listingTarget = 25) {
       activateCard(card);
       await sleep(320);
 
-      const foundUrls = await collectAfterCardClick(card);
-      foundUrls.forEach((url) => companyUrls.add(url));
+      const details = await collectAfterCardClick(card);
+      const companyProfileUrl = normalizeLinkedInCompanyUrl(details.companyProfileUrl || "") || "";
+      if (companyProfileUrl) companyUrls.add(companyProfileUrl);
+
+      listings.push({
+        ...details,
+        companyProfileUrl,
+        cardKey
+      });
       seenCardKeys.add(cardKey);
     }
 
-    if (seenCardKeys.size >= listingTarget) break;
+    if (listings.length >= listingTarget) break;
 
     const movedToNextPage = await clickNextPageIfAvailable();
     if (!movedToNextPage) break;
@@ -205,7 +243,8 @@ async function fetchAllCompanyUrlsFromJobList(listingTarget = 25) {
 
   return {
     companyUrls: Array.from(companyUrls),
-    listingsProcessed: seenCardKeys.size,
+    listings,
+    listingsProcessed: listings.length,
     pagesVisited
   };
 }

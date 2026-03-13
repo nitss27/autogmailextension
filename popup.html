@@ -8,18 +8,18 @@
   <body>
     <main>
       <h1>LinkedIn Company Extractor</h1>
-      <p class="hint">Scroll to end, paginate with Next, and fetch companies until your listing target is met.</p>
+      <p class="hint">Fetch job listings + company links across pages, then enrich with company profile data.</p>
 
       <label for="listingTarget">Number of listings to fetch</label>
       <input id="listingTarget" type="number" min="1" step="1" value="25" />
 
       <div class="actions">
-        <button id="fetchBtn">Fetch All Companies</button>
+        <button id="fetchBtn">Fetch Listings</button>
         <button id="processBtn">Process Company Profiles</button>
       </div>
 
       <label for="urlsBox">Company profile URLs</label>
-      <textarea id="urlsBox" rows="6" placeholder="https://www.linkedin.com/company/...\n..."></textarea>
+      <textarea id="urlsBox" rows="5" placeholder="https://www.linkedin.com/company/...\n..."></textarea>
 
       <div class="actions">
         <button id="copyBtn" type="button">Copy Table (TSV)</button>
@@ -27,18 +27,25 @@
       </div>
 
       <div class="table-wrap">
-        <table id="resultsTable">
+        <table>
           <thead>
             <tr>
               <th>#</th>
-              <th>Company</th>
-              <th>LinkedIn URL</th>
+              <th>Job Title</th>
+              <th>Job URL</th>
+              <th>Company (listing)</th>
+              <th>Company Profile URL</th>
+              <th>Location/Meta</th>
+              <th>Posted</th>
+              <th>Applicants</th>
+              <th>Work Type</th>
+              <th>Employment Type</th>
+              <th>Easy Apply</th>
               <th>Website</th>
               <th>Industry</th>
               <th>Company Size</th>
               <th>Headquarters</th>
               <th>Specialties</th>
-              <th>Verified Page</th>
               <th>Status</th>
             </tr>
           </thead>

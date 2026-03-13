@@ -1,36 +1,42 @@
 # LinkedIn Company Extractor (Chrome Extension)
 
-This extension collects company URLs from LinkedIn Jobs, then opens each company profile About page and extracts fields into a table.
+Extracts **job listing details + company profile details** from LinkedIn jobs pages.
+
+## What it captures
+
+### From each job listing
+- Job title
+- Job URL
+- Company name from listing
+- Company profile URL
+- Location/meta line
+- Posted time (when available)
+- Applicants text (when available)
+- Work type (On-site/Remote/Hybrid when available)
+- Employment type (Full-time/Contract/etc when available)
+- Easy Apply flag
+
+### From each company profile About page
+- Website
+- Industry
+- Company size
+- Headquarters
+- Specialties
+- Verified page date
 
 ## Workflow
 
-1. Open LinkedIn Jobs search results.
-2. Enter **Number of listings to fetch** in popup.
-3. Click **Fetch All Companies**:
-   - scrolls the job list to the end of current page,
-   - clicks job cards to gather company URLs,
-   - clicks **Next** page button and repeats,
-   - stops once target listing count is reached (or no next page).
-4. Click **Process Company Profiles**:
-   - opens each company `/about/` page in a background tab,
-   - extracts company fields,
-   - closes tab and moves to next company.
-5. Review table and use **Copy Table (TSV)**.
+1. Open LinkedIn job results page.
+2. Enter listing count target in popup.
+3. Click **Fetch Listings**:
+   - scrolls to end of current list,
+   - clicks each listing,
+   - captures listing details + company profile link,
+   - clicks Next and continues until target is met.
+4. Click **Process Company Profiles** to enrich rows with company About data.
+5. Use **Copy Table (TSV)** for export.
 
-## Extracted fields
+## Persistence
 
-- Company
-- LinkedIn URL
-- Website
-- Industry
-- Company Size
-- Headquarters
-- Specialties
-- Verified Page
-- Status
-
-## Notes
-
-- You must be logged in to LinkedIn.
-- LinkedIn UI changes can require selector updates.
-- Some rows may return `error` status due to access limits or missing data.
+- The extension saves fetched links/results in `chrome.storage.local`.
+- Closing/reopening the extension keeps previously fetched table data until you click **Clear**.

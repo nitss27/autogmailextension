@@ -14,10 +14,19 @@ function setStatus(message) {
   statusEl.textContent = message;
 }
 
-async function getActiveTabId() {
-  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tabs[0]?.id) throw new Error("No active tab found.");
-  return tabs[0].id;
+function escapeHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function getListingTarget() {
+  const parsed = Number.parseInt(listingTargetEl.value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) throw new Error("Enter a valid listing count greater than 0.");
+  return parsed;
 }
 
 function parseUrlsFromBox() {
@@ -27,21 +36,10 @@ function parseUrlsFromBox() {
     .filter(Boolean);
 }
 
-function getListingTarget() {
-  const parsed = Number.parseInt(listingTargetEl.value, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    throw new Error("Enter a valid listing count greater than 0.");
-  }
-  return parsed;
-}
-
-function escapeHtml(value) {
-  return String(value || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
+function toCellLink(url) {
+  if (!url) return "";
+  const clean = escapeHtml(url);
+  return `<a href="${clean}" target="_blank">${clean}</a>`;
 }
 
 function renderTable(rows) {
@@ -54,14 +52,21 @@ function renderTable(rows) {
     .map((row, index) => {
       return `<tr>
         <td>${index + 1}</td>
-        <td>${escapeHtml(row.companyName)}</td>
-        <td><a href="${escapeHtml(row.companyLinkedInUrl)}" target="_blank">${escapeHtml(row.companyLinkedInUrl)}</a></td>
+        <td>${escapeHtml(row.jobTitle)}</td>
+        <td>${toCellLink(row.jobUrl)}</td>
+        <td>${escapeHtml(row.companyDisplayName || row.companyName)}</td>
+        <td>${toCellLink(row.companyProfileUrl || row.companyLinkedInUrl)}</td>
+        <td>${escapeHtml(row.location)}</td>
+        <td>${escapeHtml(row.postedTime)}</td>
+        <td>${escapeHtml(row.applicants)}</td>
+        <td>${escapeHtml(row.workType)}</td>
+        <td>${escapeHtml(row.employmentType)}</td>
+        <td>${escapeHtml(row.easyApply)}</td>
         <td>${escapeHtml(row.website)}</td>
         <td>${escapeHtml(row.industry)}</td>
         <td>${escapeHtml(row.companySize)}</td>
         <td>${escapeHtml(row.headquarters)}</td>
         <td>${escapeHtml(row.specialties)}</td>
-        <td>${escapeHtml(row.verifiedPageDate)}</td>
         <td>${escapeHtml(row.status)}</td>
       </tr>`;
     })
@@ -70,27 +75,41 @@ function renderTable(rows) {
 
 function rowsToTsv(rows) {
   const headers = [
-    "Company",
-    "LinkedIn URL",
+    "Job Title",
+    "Job URL",
+    "Company (listing)",
+    "Company Profile URL",
+    "Location/Meta",
+    "Posted",
+    "Applicants",
+    "Work Type",
+    "Employment Type",
+    "Easy Apply",
     "Website",
     "Industry",
     "Company Size",
     "Headquarters",
     "Specialties",
-    "Verified Page",
     "Status"
   ];
 
   const lines = rows.map((row) =>
     [
-      row.companyName,
-      row.companyLinkedInUrl,
+      row.jobTitle,
+      row.jobUrl,
+      row.companyDisplayName || row.companyName,
+      row.companyProfileUrl || row.companyLinkedInUrl,
+      row.location,
+      row.postedTime,
+      row.applicants,
+      row.workType,
+      row.employmentType,
+      row.easyApply,
       row.website,
       row.industry,
       row.companySize,
       row.headquarters,
       row.specialties,
-      row.verifiedPageDate,
       row.status
     ]
       .map((v) => String(v || "").replace(/\t/g, " ").replace(/\r?\n/g, " "))
@@ -100,13 +119,41 @@ function rowsToTsv(rows) {
   return [headers.join("\t"), ...lines].join("\n");
 }
 
+async function getActiveTabId() {
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tabs[0]?.id) throw new Error("No active tab found.");
+  return tabs[0].id;
+}
+
+async function persistState() {
+  await chrome.storage.local.set({
+    listingTarget: listingTargetEl.value,
+    latestCompanyUrls,
+    latestRows,
+    urlsBoxValue: urlsBox.value
+  });
+}
+
+async function restoreState() {
+  const state = await chrome.storage.local.get(["listingTarget", "latestCompanyUrls", "latestRows", "urlsBoxValue"]);
+  if (state.listingTarget) listingTargetEl.value = state.listingTarget;
+  latestCompanyUrls = Array.isArray(state.latestCompanyUrls) ? state.latestCompanyUrls : [];
+  latestRows = Array.isArray(state.latestRows) ? state.latestRows : [];
+  if (typeof state.urlsBoxValue === "string") {
+    urlsBox.value = state.urlsBoxValue;
+  } else if (latestCompanyUrls.length) {
+    urlsBox.value = latestCompanyUrls.join("\n");
+  }
+  renderTable(latestRows);
+}
+
 fetchBtn.addEventListener("click", async () => {
   try {
     fetchBtn.disabled = true;
     processBtn.disabled = true;
 
     const listingTarget = getListingTarget();
-    setStatus(`Fetching companies from up to ${listingTarget} listings (scroll + Next pagination)...`);
+    setStatus(`Fetching ${listingTarget} listings across pages...`);
 
     const tabId = await getActiveTabId();
     const response = await chrome.tabs.sendMessage(tabId, {
@@ -114,13 +161,19 @@ fetchBtn.addEventListener("click", async () => {
       payload: { listingTarget }
     });
 
-    if (!response?.ok) throw new Error(response?.error || "Failed to fetch links");
+    if (!response?.ok) throw new Error(response?.error || "Failed to fetch listings");
 
     latestCompanyUrls = response.companyUrls || [];
     urlsBox.value = latestCompanyUrls.join("\n");
-    setStatus(
-      `Fetched ${latestCompanyUrls.length} unique company URLs from ${response.listingsProcessed || 0} listings across ${response.pagesVisited || 1} pages.`
-    );
+
+    latestRows = (response.listings || []).map((listing) => ({
+      ...listing,
+      status: "fetched"
+    }));
+    renderTable(latestRows);
+
+    setStatus(`Fetched ${response.listingsProcessed || 0} listings / ${latestCompanyUrls.length} company URLs across ${response.pagesVisited || 1} pages.`);
+    await persistState();
   } catch (error) {
     setStatus(`Fetch failed: ${error.message}`);
   } finally {
@@ -136,12 +189,9 @@ processBtn.addEventListener("click", async () => {
 
     const inputUrls = parseUrlsFromBox();
     latestCompanyUrls = inputUrls.length ? inputUrls : latestCompanyUrls;
+    if (!latestCompanyUrls.length) throw new Error("No company URLs found. Run Fetch Listings first.");
 
-    if (!latestCompanyUrls.length) {
-      throw new Error("No company URLs found. Run Fetch All Companies first.");
-    }
-
-    setStatus(`Opening ${latestCompanyUrls.length} company tabs and extracting About info...`);
+    setStatus(`Processing ${latestCompanyUrls.length} company profiles...`);
     const response = await chrome.runtime.sendMessage({
       type: "PROCESS_COMPANY_URLS",
       payload: { companyUrls: latestCompanyUrls }
@@ -149,9 +199,36 @@ processBtn.addEventListener("click", async () => {
 
     if (!response?.ok) throw new Error(response?.error || "Failed to process company profiles");
 
-    latestRows = response.companyProfiles || [];
+    const companyMap = new Map();
+    for (const p of response.companyProfiles || []) {
+      const key = (p.companyLinkedInUrl || "").replace(/\/+$/, "");
+      if (key) companyMap.set(key, p);
+    }
+
+    latestRows = latestRows.map((row) => {
+      const key = (row.companyProfileUrl || row.companyLinkedInUrl || "").replace(/\/+$/, "");
+      const company = companyMap.get(key);
+      return {
+        ...row,
+        companyName: company?.companyName || row.companyName || "",
+        companyLinkedInUrl: company?.companyLinkedInUrl || row.companyProfileUrl || row.companyLinkedInUrl || "",
+        website: company?.website || "",
+        industry: company?.industry || "",
+        companySize: company?.companySize || "",
+        headquarters: company?.headquarters || "",
+        specialties: company?.specialties || "",
+        verifiedPageDate: company?.verifiedPageDate || "",
+        status: company?.status || "fetched"
+      };
+    });
+
+    if (!latestRows.length) {
+      latestRows = (response.companyProfiles || []).map((p) => ({ ...p, status: p.status || "ok" }));
+    }
+
     renderTable(latestRows);
     setStatus(`Done. Processed ${response.processedCount} company profiles.`);
+    await persistState();
   } catch (error) {
     setStatus(`Process failed: ${error.message}`);
   } finally {
@@ -170,10 +247,13 @@ copyBtn.addEventListener("click", async () => {
   }
 });
 
-clearBtn.addEventListener("click", () => {
+clearBtn.addEventListener("click", async () => {
   latestCompanyUrls = [];
   latestRows = [];
   urlsBox.value = "";
   renderTable([]);
-  setStatus("Cleared links and table.");
+  await chrome.storage.local.clear();
+  setStatus("Cleared links, table, and saved data.");
 });
+
+restoreState().catch(() => {});
