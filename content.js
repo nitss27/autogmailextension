@@ -253,12 +253,43 @@ function cleanFieldText(value) {
   return String(value || "").replace(/\s+/g, " ").trim();
 }
 
+function normalizeWebsiteHref(rawHref) {
+  if (!rawHref) return "";
+
+  try {
+    const url = new URL(rawHref, window.location.origin);
+    const lower = url.href.toLowerCase();
+
+    if (lower.startsWith("tel:") || lower.startsWith("mailto:") || lower.startsWith("javascript:")) return "";
+
+    // Handle LinkedIn redirect wrappers that carry real external URL in query params.
+    if (url.hostname.includes("linkedin.com")) {
+      const nested = url.searchParams.get("url") || url.searchParams.get("redirect") || url.searchParams.get("u");
+      if (nested) {
+        try {
+          const decoded = decodeURIComponent(nested);
+          const nestedUrl = new URL(decoded);
+          if (nestedUrl.protocol === "http:" || nestedUrl.protocol === "https:") {
+            return nestedUrl.href;
+          }
+        } catch {
+          // keep falling through
+        }
+      }
+
+      // direct LinkedIn URLs are not company websites
+      return "";
+    }
+
+    if (url.protocol === "http:" || url.protocol === "https:") return url.href;
+    return "";
+  } catch {
+    return "";
+  }
+}
+
 function isLikelyWebsiteUrl(href) {
-  if (!href) return false;
-  const lower = href.toLowerCase();
-  if (lower.startsWith("tel:") || lower.startsWith("mailto:") || lower.startsWith("javascript:")) return false;
-  if (lower.includes("linkedin.com")) return false;
-  return lower.startsWith("http://") || lower.startsWith("https://");
+  return Boolean(normalizeWebsiteHref(href));
 }
 
 function readAboutDefinitionList() {
@@ -280,7 +311,8 @@ function readAboutDefinitionList() {
       }
 
       if (!values.length) continue;
-      fieldMap.set(label, values);
+      const existing = fieldMap.get(label) || [];
+      fieldMap.set(label, [...existing, ...values]);
     }
   }
 
@@ -293,7 +325,8 @@ function pickWebsiteFromFieldMap(fieldMap) {
     const anchors = Array.from(dd.querySelectorAll("a[href]"));
     for (const a of anchors) {
       const href = a.getAttribute("href") || "";
-      if (isLikelyWebsiteUrl(href)) return href.trim();
+      const normalized = normalizeWebsiteHref(href);
+      if (normalized) return normalized;
     }
 
     const txt = cleanFieldText(dd.textContent);
@@ -303,7 +336,8 @@ function pickWebsiteFromFieldMap(fieldMap) {
   const fallbackAnchors = Array.from(document.querySelectorAll('dl a[href]'));
   for (const a of fallbackAnchors) {
     const href = a.getAttribute("href") || "";
-    if (isLikelyWebsiteUrl(href)) return href.trim();
+    const normalized = normalizeWebsiteHref(href);
+    if (normalized) return normalized;
   }
 
   return "";
