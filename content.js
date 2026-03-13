@@ -132,10 +132,25 @@ async function scrollJobListToEnd() {
   }
 }
 
+function findNextPaginationButton() {
+  const selectors = [
+    'button[data-testid="pagination-controls-next-button-visible"]',
+    'button[data-testid="pagination-controls-next-button"]',
+    'button.jobs-search-pagination__button--next[aria-label*="View next page"]',
+    'button.jobs-search-pagination__button--next',
+    'button[aria-label="View next page"]'
+  ];
+
+  for (const selector of selectors) {
+    const button = document.querySelector(selector);
+    if (button) return button;
+  }
+
+  return null;
+}
+
 async function clickNextPageIfAvailable() {
-  const nextBtn = document.querySelector(
-    'button.jobs-search-pagination__button--next[aria-label*="View next page"], button.jobs-search-pagination__button--next, button[aria-label="View next page"]'
-  );
+  const nextBtn = findNextPaginationButton();
 
   if (!nextBtn || nextBtn.disabled || nextBtn.getAttribute("aria-disabled") === "true") {
     return false;
@@ -144,7 +159,7 @@ async function clickNextPageIfAvailable() {
   const firstBefore = getCardKey(getJobCards()[0], 0);
   clickElement(nextBtn);
 
-  for (let i = 0; i < 35; i += 1) {
+  for (let i = 0; i < 40; i += 1) {
     await sleep(300);
     const firstAfter = getCardKey(getJobCards()[0], 0);
     if (firstAfter && firstAfter !== firstBefore) return true;
