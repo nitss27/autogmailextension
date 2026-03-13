@@ -249,40 +249,106 @@ async function fetchAllCompanyUrlsFromJobList(listingTarget = 25) {
   };
 }
 
-function extractCompanyDataFromCurrentPage() {
-  const getFieldByHeading = (headingText) => {
-    const headings = Array.from(document.querySelectorAll("dt h3"));
-    const match = headings.find((h) => h.textContent?.trim().toLowerCase() === headingText.toLowerCase());
-    if (!match) return "";
-    const dt = match.closest("dt");
-    const dd = dt?.nextElementSibling;
-    return dd?.textContent?.trim() || "";
-  };
+function cleanFieldText(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
 
+function isLikelyWebsiteUrl(href) {
+  if (!href) return false;
+  const lower = href.toLowerCase();
+  if (lower.startsWith("tel:") || lower.startsWith("mailto:") || lower.startsWith("javascript:")) return false;
+  if (lower.includes("linkedin.com")) return false;
+  return lower.startsWith("http://") || lower.startsWith("https://");
+}
+
+function readAboutDefinitionList() {
+  const fieldMap = new Map();
+  const dls = Array.from(document.querySelectorAll("dl.overflow-hidden, dl"));
+
+  for (const dl of dls) {
+    const dts = Array.from(dl.querySelectorAll(":scope > dt"));
+    for (const dt of dts) {
+      const headingEl = dt.querySelector("h3");
+      const label = cleanFieldText(headingEl?.textContent).toLowerCase();
+      if (!label) continue;
+
+      const values = [];
+      let dd = dt.nextElementSibling;
+      while (dd && dd.tagName === "DD") {
+        values.push(dd);
+        dd = dd.nextElementSibling;
+      }
+
+      if (!values.length) continue;
+      fieldMap.set(label, values);
+    }
+  }
+
+  return fieldMap;
+}
+
+function pickWebsiteFromFieldMap(fieldMap) {
+  const websiteDDs = fieldMap.get("website") || [];
+  for (const dd of websiteDDs) {
+    const anchors = Array.from(dd.querySelectorAll("a[href]"));
+    for (const a of anchors) {
+      const href = a.getAttribute("href") || "";
+      if (isLikelyWebsiteUrl(href)) return href.trim();
+    }
+
+    const txt = cleanFieldText(dd.textContent);
+    if (/^https?:\/\//i.test(txt)) return txt;
+  }
+
+  const fallbackAnchors = Array.from(document.querySelectorAll('dl a[href]'));
+  for (const a of fallbackAnchors) {
+    const href = a.getAttribute("href") || "";
+    if (isLikelyWebsiteUrl(href)) return href.trim();
+  }
+
+  return "";
+}
+
+function pickFieldText(fieldMap, label) {
+  const values = fieldMap.get(label.toLowerCase()) || [];
+  if (!values.length) return "";
+  return cleanFieldText(values[0].textContent);
+}
+
+async function waitForAboutFields(timeoutMs = 9000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const hasDL = document.querySelector("dl.overflow-hidden, dl");
+    const hasHeadings = document.querySelector("dt h3");
+    if (hasDL && hasHeadings) return;
+    await sleep(250);
+  }
+}
+
+async function extractCompanyDataFromCurrentPage() {
+  await waitForAboutFields();
+
+  const fieldMap = readAboutDefinitionList();
   const companyLinkedInUrl = normalizeLinkedInCompanyUrl(window.location.href) || window.location.href;
 
-  const websiteAnchor = Array.from(document.querySelectorAll("dt + dd a[href]")).find((a) => {
-    const dt = a.closest("dd")?.previousElementSibling;
-    const heading = dt?.querySelector("h3")?.textContent?.trim().toLowerCase();
-    return heading === "website";
-  });
-
   const companyName =
-    document.querySelector("h1")?.textContent?.trim() ||
-    document.querySelector(".org-top-card-summary__title")?.textContent?.trim() ||
-    document.title?.replace(" | LinkedIn", "").trim() ||
+    cleanFieldText(document.querySelector("h1")?.textContent) ||
+    cleanFieldText(document.querySelector(".org-top-card-summary__title")?.textContent) ||
+    cleanFieldText(document.title?.replace(" | LinkedIn", "")) ||
     "";
 
   return {
     companyName,
     companyLinkedInUrl,
     aboutUrl: companyLinkedInUrl.replace(/\/+$/, "") + "/about/",
-    website: websiteAnchor?.href || getFieldByHeading("Website"),
-    industry: getFieldByHeading("Industry"),
-    companySize: getFieldByHeading("Company size"),
-    headquarters: getFieldByHeading("Headquarters"),
-    specialties: getFieldByHeading("Specialties"),
-    verifiedPageDate: getFieldByHeading("Verified page"),
+    website: pickWebsiteFromFieldMap(fieldMap),
+    phone: pickFieldText(fieldMap, "Phone"),
+    industry: pickFieldText(fieldMap, "Industry"),
+    companySize: pickFieldText(fieldMap, "Company size"),
+    headquarters: pickFieldText(fieldMap, "Headquarters"),
+    founded: pickFieldText(fieldMap, "Founded"),
+    specialties: pickFieldText(fieldMap, "Specialties"),
+    verifiedPageDate: pickFieldText(fieldMap, "Verified page"),
     status: "ok"
   };
 }
@@ -302,12 +368,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "EXTRACT_COMPANY_DETAILS_FROM_PAGE") {
-    try {
-      const details = extractCompanyDataFromCurrentPage();
+    (async () => {
+      const details = await extractCompanyDataFromCurrentPage();
       sendResponse({ ok: true, details });
-    } catch (error) {
+    })().catch((error) => {
       sendResponse({ ok: false, error: error.message || "Failed to extract company details" });
-    }
+    });
     return true;
   }
 });
