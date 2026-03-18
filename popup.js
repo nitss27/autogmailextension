@@ -2,51 +2,16 @@ const fetchBtn = document.getElementById("fetchBtn");
 const processBtn = document.getElementById("processBtn");
 const copyBtn = document.getElementById("copyBtn");
 const clearBtn = document.getElementById("clearBtn");
-const resetSelectorsBtn = document.getElementById("resetSelectorsBtn");
-const settingsToggleBtn = document.getElementById("settingsToggleBtn");
-const settingsPanel = document.getElementById("settingsPanel");
 const listingTargetEl = document.getElementById("listingTarget");
 const urlsBox = document.getElementById("urlsBox");
 const resultsBody = document.getElementById("resultsBody");
 const statusEl = document.getElementById("status");
-const selectorActionButtons = Array.from(document.querySelectorAll("[data-action][data-selector-key]"));
-
-const selectorDefinitions = {
-  jobCard: {
-    label: "Listing card",
-    input: document.getElementById("jobCardSelectorInput"),
-    value: document.getElementById("jobCardSelectorValue")
-  },
-  jobCardClickable: {
-    label: "Listing click target",
-    input: document.getElementById("jobCardClickableSelectorInput"),
-    value: document.getElementById("jobCardClickableSelectorValue")
-  },
-  jobDetailsPane: {
-    label: "Job details pane",
-    input: document.getElementById("jobDetailsPaneSelectorInput"),
-    value: document.getElementById("jobDetailsPaneSelectorValue")
-  },
-  paginationNext: {
-    label: "Next page button",
-    input: document.getElementById("paginationNextSelectorInput"),
-    value: document.getElementById("paginationNextSelectorValue")
-  }
-};
 
 let latestCompanyUrls = [];
 let latestRows = [];
-let selectorConfig = {};
-let settingsOpen = false;
 
 function setStatus(message) {
   statusEl.textContent = message;
-}
-
-function setSettingsOpen(nextOpen) {
-  settingsOpen = Boolean(nextOpen);
-  settingsPanel.classList.toggle("is-hidden", !settingsOpen);
-  settingsToggleBtn.textContent = settingsOpen ? "Hide settings" : "Settings";
 }
 
 function escapeHtml(value) {
@@ -56,22 +21,6 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;")
     .replace(/\"/g, "&quot;")
     .replace(/'/g, "&#039;");
-}
-
-function getSelectorValue(selectorKey, { preferInput = true } = {}) {
-  const definition = selectorDefinitions[selectorKey];
-  if (!definition) return "";
-  const inputValue = definition.input.value.trim();
-  if (preferInput && inputValue) return inputValue;
-  return String(selectorConfig[selectorKey] || "").trim();
-}
-
-function renderSelectorConfig() {
-  for (const [key, definition] of Object.entries(selectorDefinitions)) {
-    const savedValue = String(selectorConfig[key] || "").trim();
-    definition.input.value = savedValue;
-    definition.value.textContent = savedValue || "Using built-in defaults";
-  }
 }
 
 function getListingTarget() {
@@ -181,107 +130,21 @@ async function persistState() {
     listingTarget: listingTargetEl.value,
     latestCompanyUrls,
     latestRows,
-    urlsBoxValue: urlsBox.value,
-    selectorConfig
+    urlsBoxValue: urlsBox.value
   });
 }
 
 async function restoreState() {
-  const state = await chrome.storage.local.get([
-    "listingTarget",
-    "latestCompanyUrls",
-    "latestRows",
-    "urlsBoxValue",
-    "selectorConfig"
-  ]);
+  const state = await chrome.storage.local.get(["listingTarget", "latestCompanyUrls", "latestRows", "urlsBoxValue"]);
   if (state.listingTarget) listingTargetEl.value = state.listingTarget;
   latestCompanyUrls = Array.isArray(state.latestCompanyUrls) ? state.latestCompanyUrls : [];
   latestRows = Array.isArray(state.latestRows) ? state.latestRows : [];
-  selectorConfig = state.selectorConfig && typeof state.selectorConfig === "object" ? state.selectorConfig : {};
   if (typeof state.urlsBoxValue === "string") {
     urlsBox.value = state.urlsBoxValue;
   } else if (latestCompanyUrls.length) {
     urlsBox.value = latestCompanyUrls.join("\n");
   }
-  renderSelectorConfig();
   renderTable(latestRows);
-}
-
-async function saveSelector(selectorKey) {
-  const definition = selectorDefinitions[selectorKey];
-  if (!definition) throw new Error("Unknown selector setting.");
-
-  const selector = definition.input.value.trim();
-  if (!selector) {
-    delete selectorConfig[selectorKey];
-  } else {
-    selectorConfig = {
-      ...selectorConfig,
-      [selectorKey]: selector
-    };
-  }
-
-  if (!selector) {
-    const nextConfig = { ...selectorConfig };
-    delete nextConfig[selectorKey];
-    selectorConfig = nextConfig;
-  }
-
-  renderSelectorConfig();
-  await persistState();
-  setStatus(`${definition.label} ${selector ? "saved" : "cleared"}.`);
-}
-
-async function clearSelector(selectorKey) {
-  const definition = selectorDefinitions[selectorKey];
-  if (!definition) return;
-  definition.input.value = "";
-  await saveSelector(selectorKey);
-}
-
-async function startSelectorPicker(selectorKey) {
-  const tabId = await getActiveTabId();
-  const definition = selectorDefinitions[selectorKey];
-  const response = await chrome.tabs.sendMessage(tabId, {
-    type: "START_SELECTOR_PICK",
-    payload: { selectorKey }
-  });
-
-  if (!response?.ok) {
-    throw new Error(response?.error || `Failed to start picker for ${definition?.label || selectorKey}`);
-  }
-
-  setStatus(`Picker started for ${definition?.label || selectorKey}. Hover LinkedIn to see the highlighted boundary, click the target element to save it, or press Esc to cancel.`);
-}
-
-async function testSelector(selectorKey) {
-  const selector = getSelectorValue(selectorKey);
-  const definition = selectorDefinitions[selectorKey];
-  if (!selector) {
-    setStatus(`${definition?.label || selectorKey}: using built-in defaults, so there is no custom selector to test.`);
-    return;
-  }
-
-  const tabId = await getActiveTabId();
-  const response = await chrome.tabs.sendMessage(tabId, {
-    type: "TEST_SELECTOR",
-    payload: { selectorKey, selector }
-  });
-
-  if (!response?.ok) {
-    throw new Error(response?.error || "Selector test failed.");
-  }
-
-  setStatus(
-    `${definition?.label || selectorKey} test: matched ${response.count} element(s). ${response.preview ? `First match: ${response.preview}` : ""}`.trim()
-  );
-}
-
-async function resetSelectorConfig() {
-  selectorConfig = {};
-  renderSelectorConfig();
-  await persistState();
-  setStatus("Selector settings reset. The extension will use built-in defaults on the next run.");
 }
 
 fetchBtn.addEventListener("click", async () => {
@@ -390,59 +253,9 @@ clearBtn.addEventListener("click", async () => {
   latestCompanyUrls = [];
   latestRows = [];
   urlsBox.value = "";
-  selectorConfig = {};
   renderTable([]);
-  renderSelectorConfig();
   await chrome.storage.local.clear();
-  setStatus("Cleared links, table, selector settings, and saved data.");
-});
-
-resetSelectorsBtn.addEventListener("click", () => {
-  resetSelectorConfig().catch((error) => {
-    setStatus(`Could not reset selectors: ${error.message}`);
-  });
-});
-
-settingsToggleBtn.addEventListener("click", () => {
-  setSettingsOpen(!settingsOpen);
-});
-
-selectorActionButtons.forEach((button) => {
-  button.addEventListener("click", () => {
-    const action = button.dataset.action;
-    const selectorKey = button.dataset.selectorKey;
-
-    const actionMap = {
-      pick: () => startSelectorPicker(selectorKey),
-      test: () => testSelector(selectorKey),
-      save: () => saveSelector(selectorKey),
-      clear: () => clearSelector(selectorKey)
-    };
-
-    const handler = actionMap[action];
-    if (!handler) return;
-
-    handler().catch((error) => {
-      setStatus(`${selectorDefinitions[selectorKey]?.label || selectorKey} ${action} failed: ${error.message}`);
-    });
-  });
-});
-
-chrome.runtime.onMessage.addListener((message) => {
-  if (message?.type === "SELECTOR_PICKED") {
-    const { selectorKey, selector } = message.payload || {};
-    const definition = selectorDefinitions[selectorKey];
-    if (!selectorKey || !definition) return;
-    selectorConfig = { ...selectorConfig, [selectorKey]: selector };
-    renderSelectorConfig();
-    persistState().catch(() => {});
-    setStatus(`${definition.label} saved from picker: ${selector}`);
-  }
-
-  if (message?.type === "SELECTOR_PICK_CANCELLED") {
-    const definition = selectorDefinitions[message.payload?.selectorKey];
-    setStatus(`${definition?.label || message.payload?.selectorKey || "Selector"} picker cancelled.`);
-  }
+  setStatus("Cleared links, table, and saved data.");
 });
 
 restoreState().catch(() => {});

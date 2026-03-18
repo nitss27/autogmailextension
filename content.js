@@ -1,11 +1,16 @@
 const SELECTOR_CONFIG_STORAGE_KEY = "selectorConfig";
 const selectorDefaults = {
   jobCard: [
+    'div[data-display-contents="true"] > div[role="button"][componentkey^="job-card-component-ref-"]',
+    '[role="button"][componentkey^="job-card-component-ref-"]',
     '[data-view-name="job-search-job-card"]',
     '.job-card-container[data-job-id]',
     'li[data-occludable-job-id] .job-card-container'
   ],
   jobCardClickable: [
+    ':scope',
+    '[role="button"][componentkey^="job-card-component-ref-"]',
+    'div[role="button"][componentkey^="job-card-component-ref-"]',
     '[role="button"][componentkey^="job-card-component-ref-"]',
     'a.job-card-list__title--link',
     'a.job-card-container__link',
@@ -201,10 +206,20 @@ async function activateCard(card) {
 
 function extractJobDetails(card) {
   const pane = getJobDetailsPane();
+  const cardParagraphs = Array.from(card.querySelectorAll("p"))
+    .map((el) => textOf(el))
+    .filter(Boolean);
+  const cardVisibleSpans = Array.from(card.querySelectorAll("span"))
+    .map((el) => textOf(el))
+    .filter(Boolean);
 
   const jobTitle =
     textOf(pane?.querySelector('a[href*="/jobs/view/"]')) ||
-    textOf(card.querySelector('a.job-card-list__title--link, a[href*="/jobs/view/"]'));
+    textOf(card.querySelector('a.job-card-list__title--link, a[href*="/jobs/view/"]')) ||
+    cardVisibleSpans.find((value) => /verified job/i.test(value))?.replace(/\s*\(verified job\)\s*/i, "").trim() ||
+    cardVisibleSpans.find((value) => value && value.length > 5) ||
+    cardParagraphs[0] ||
+    "";
 
   const jobUrlRaw =
     pane?.querySelector('a[href*="/jobs/view/"]')?.href ||
@@ -214,11 +229,17 @@ function extractJobDetails(card) {
 
   const companyAnchor = pane?.querySelector('a[href*="/company/"]') || card.querySelector('a[href*="/company/"]');
   const companyProfileUrl = normalizeLinkedInCompanyUrl(companyAnchor?.href || "") || "";
-  const companyDisplayName = textOf(companyAnchor) || textOf(card.querySelector('p a[href*="/company/"]'));
+  const companyDisplayName =
+    textOf(companyAnchor) ||
+    textOf(card.querySelector('p a[href*="/company/"]')) ||
+    cardParagraphs.find((value) => value && value !== jobTitle && !/remote|hybrid|on-site|ago|posted|viewed/i.test(value)) ||
+    "";
 
   const metaLine =
     textOf(pane?.querySelector("p.ba8b842d._6ae9bfc9")) ||
-    textOf(card.querySelector(".job-card-container__metadata-wrapper"));
+    textOf(card.querySelector(".job-card-container__metadata-wrapper")) ||
+    cardParagraphs.find((value) => /remote|hybrid|on-site|united states|posted|ago/i.test(value)) ||
+    "";
 
   const applicantsText =
     textOf(pane?.querySelector("p.ba8b842d._6ae9bfc9.d051f947")) ||
