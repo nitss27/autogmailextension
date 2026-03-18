@@ -19,7 +19,7 @@ function escapeHtml(value) {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
+    .replace(/\"/g, "&quot;")
     .replace(/'/g, "&#039;");
 }
 
@@ -165,14 +165,16 @@ fetchBtn.addEventListener("click", async () => {
 
     latestCompanyUrls = response.companyUrls || [];
     urlsBox.value = latestCompanyUrls.join("\n");
-
     latestRows = (response.listings || []).map((listing) => ({
       ...listing,
-      status: "fetched"
+      status: listing.status || "fetched"
     }));
     renderTable(latestRows);
 
-    setStatus(`Fetched ${response.listingsProcessed || 0} listings / ${latestCompanyUrls.length} company URLs across ${response.pagesVisited || 1} pages.`);
+    const warning = response.warnings?.length ? ` Warnings: ${response.warnings.join(" | ")}` : "";
+    setStatus(
+      `Fetched ${response.listingsProcessed || 0} listings / ${latestCompanyUrls.length} company URLs across ${response.pagesVisited || 1} pages.${warning}`
+    );
     await persistState();
   } catch (error) {
     setStatus(`Fetch failed: ${error.message}`);
@@ -218,7 +220,7 @@ processBtn.addEventListener("click", async () => {
         headquarters: company?.headquarters || "",
         specialties: company?.specialties || "",
         verifiedPageDate: company?.verifiedPageDate || "",
-        status: company?.status || "fetched"
+        status: company?.status || row.status || "fetched"
       };
     });
 
