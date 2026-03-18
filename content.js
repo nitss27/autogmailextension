@@ -8,10 +8,10 @@ const selectorDefaults = {
     'li[data-occludable-job-id] .job-card-container'
   ],
   jobCardClickable: [
-    ':scope',
+    'a[href*="/jobs/view/"]',
+    'p a[href*="/jobs/view/"]',
     '[role="button"][componentkey^="job-card-component-ref-"]',
     'div[role="button"][componentkey^="job-card-component-ref-"]',
-    '[role="button"][componentkey^="job-card-component-ref-"]',
     'a.job-card-list__title--link',
     'a.job-card-container__link',
     '[role="button"]'
@@ -231,6 +231,13 @@ function getDetailsSignature() {
 }
 
 function findCardActivationTarget(card) {
+  const directJobLink = (
+    card.matches?.('a[href*="/jobs/view/"]') ? card : null
+  ) || (
+    card.querySelector('a[href*="/jobs/view/"]')
+  );
+  if (directJobLink) return directJobLink;
+
   const customTarget = queryFirst(getSelectorList("jobCardClickable"), card);
   if (customTarget) return customTarget;
 
