@@ -67,10 +67,30 @@ function clickElement(el) {
     el.focus({ preventScroll: true });
   }
 
-  const events = ["pointerover", "mouseover", "pointerdown", "mousedown", "pointerup", "mouseup", "click"];
-  for (const type of events) {
-    const EventCtor = type.startsWith("pointer") ? PointerEvent : MouseEvent;
-    el.dispatchEvent(new EventCtor(type, { bubbles: true, cancelable: true, composed: true }));
+  const eventSpecs = [
+    ["pointerover", PointerEvent],
+    ["mouseover", MouseEvent],
+    ["pointerenter", PointerEvent],
+    ["mouseenter", MouseEvent],
+    ["pointerdown", PointerEvent],
+    ["mousedown", MouseEvent],
+    ["pointerup", PointerEvent],
+    ["mouseup", MouseEvent],
+    ["click", MouseEvent]
+  ];
+
+  for (const [type, EventCtor] of eventSpecs) {
+    el.dispatchEvent(
+      new EventCtor(type, {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        button: 0,
+        buttons: 1,
+        detail: 1,
+        pointerType: "mouse"
+      })
+    );
   }
 
   if (typeof el.click === "function") {
@@ -128,9 +148,27 @@ function findCardActivationTarget(card) {
   return card;
 }
 
+function getCardActivationCandidates(card) {
+  const contentBlock = card.querySelector("figure")?.closest("div");
+  const candidates = [
+    findCardActivationTarget(card),
+    contentBlock,
+    card.querySelector("figure"),
+    card.querySelector("img"),
+    card.querySelector("p span.d5843e4c"),
+    card.querySelector("p._270d69ec"),
+    card,
+    card.parentElement
+  ].filter(Boolean);
+
+  return Array.from(new Set(candidates));
+}
+
 function activateCard(card) {
-  const target = findCardActivationTarget(card);
-  clickElement(target);
+  const candidates = getCardActivationCandidates(card);
+  for (const candidate of candidates) {
+    clickElement(candidate);
+  }
 }
 
 function extractJobDetails(card) {
