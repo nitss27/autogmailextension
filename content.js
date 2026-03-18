@@ -157,6 +157,44 @@ function getJobDetailsPane() {
   return queryFirst(getSelectorList("jobDetailsPane"));
 }
 
+function clickIfPresent(el) {
+  if (!el) return false;
+  clickElement(el);
+  return true;
+}
+
+function findSectionByHeading(root, headingText) {
+  if (!root) return null;
+
+  const headings = Array.from(root.querySelectorAll("h1, h2, h3, h4"));
+  const match = headings.find((heading) => textOf(heading).toLowerCase() === headingText.toLowerCase());
+  if (!match) return null;
+
+  return (
+    match.closest('[data-sdui-component]') ||
+    match.closest('[componentkey]') ||
+    match.parentElement?.parentElement ||
+    match.parentElement ||
+    match
+  );
+}
+
+function extractTextFromExpandableBox(section) {
+  if (!section) return "";
+
+  const expandableBox =
+    section.querySelector('[data-testid="expandable-text-box"]') ||
+    section.querySelector('[data-testid="expandable-text-box"] *');
+
+  return textOf(expandableBox);
+}
+
+function expandAboutJobSection(section) {
+  if (!section) return false;
+  const button = section.querySelector('[data-testid="expandable-text-button"]');
+  return clickIfPresent(button);
+}
+
 function getDetailsSignature() {
   const pane = getJobDetailsPane();
   if (!pane) return "";
@@ -250,6 +288,21 @@ function extractJobDetails(card) {
   const employmentType = chips.find((v) => /full-time|part-time|contract|internship|temporary/i.test(v)) || "";
   const postedTime = chips.find((v) => /hour|day|week|month|ago/i.test(v)) || "";
   const easyApply = chips.some((v) => /easy apply/i.test(v)) || !!pane?.querySelector('[aria-label*="Easy Apply"]');
+  const aboutJobSection = findSectionByHeading(pane, "About the job");
+  const hasAboutSection = Boolean(aboutJobSection);
+  expandAboutJobSection(aboutJobSection);
+  const aboutJob = extractTextFromExpandableBox(aboutJobSection);
+
+  const featuredBenefitsSection = aboutJobSection;
+  const featuredBenefitsHeading = Array.from(featuredBenefitsSection?.querySelectorAll("p, h2, h3") || []).find(
+    (el) => textOf(el).toLowerCase() === "featured benefits"
+  );
+  const featuredBenefits =
+    textOf(featuredBenefitsHeading?.nextElementSibling) ||
+    Array.from(featuredBenefitsSection?.querySelectorAll("p") || [])
+      .map((el) => textOf(el))
+      .find((value) => value && value.toLowerCase() !== "featured benefits" && value !== aboutJob) ||
+    "";
 
   return {
     jobTitle,
@@ -261,7 +314,10 @@ function extractJobDetails(card) {
     applicants: applicantsText,
     workType,
     employmentType,
-    easyApply: easyApply ? "Yes" : "No"
+    easyApply: easyApply ? "Yes" : "No",
+    aboutJob,
+    featuredBenefits,
+    hasAboutSection
   };
 }
 
@@ -273,7 +329,8 @@ async function collectAfterCardClick(card, previousSignature = "", rounds = 16) 
     const currentSignature = `${details.jobTitle}|${details.jobUrl}|${details.companyProfileUrl}`;
     const hasUsefulData = details.companyProfileUrl || details.jobTitle || details.jobUrl;
     const changedListing = currentSignature && currentSignature !== previousSignature;
-    if (hasUsefulData && (changedListing || !previousSignature || details.companyProfileUrl)) break;
+    const aboutReady = !details.hasAboutSection || Boolean(details.aboutJob);
+    if (hasUsefulData && aboutReady && (changedListing || !previousSignature || details.companyProfileUrl)) break;
     await sleep(300);
   }
 
