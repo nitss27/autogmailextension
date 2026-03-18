@@ -27,7 +27,7 @@ function normalizeLinkedInCompanyUrl(rawUrl) {
 function getJobCards() {
   return Array.from(
     document.querySelectorAll(
-      '[data-view-name="job-search-job-card"], .job-card-container[data-job-id], li[data-occludable-job-id] .job-card-container'
+      '[role="button"][componentkey^="job-card-component-ref-"], [data-view-name="job-search-job-card"], .job-card-container[data-job-id], li[data-occludable-job-id] .job-card-container'
     )
   );
 }
@@ -44,7 +44,8 @@ function getCardKey(card, index) {
 
   const title =
     card?.querySelector("a.job-card-list__title--link")?.textContent?.trim() ||
-    card?.querySelector("[role='button']")?.textContent?.trim()?.slice(0, 120) ||
+    card?.querySelector("p span.d5843e4c")?.textContent?.trim() ||
+    card?.textContent?.trim()?.slice(0, 120) ||
     "untitled";
 
   return `fallback:${index}:${title}`;
@@ -124,8 +125,8 @@ function findClosestClickableAncestor(node, root) {
 function findCardActivationTarget(card) {
   const directCandidates = [
     card.matches?.('[role="button"][componentkey^="job-card-component-ref-"]') ? card : null,
-    card.querySelector('[role="button"][componentkey^="job-card-component-ref-"]'),
     card.matches?.('[role="button"]') ? card : null,
+    card.querySelector('[role="button"][componentkey^="job-card-component-ref-"]'),
     card.querySelector("a.job-card-list__title--link"),
     card.querySelector("a.job-card-container__link"),
     card.querySelector("p span.d5843e4c"),
