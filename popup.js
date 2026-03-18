@@ -3,6 +3,8 @@ const processBtn = document.getElementById("processBtn");
 const copyBtn = document.getElementById("copyBtn");
 const clearBtn = document.getElementById("clearBtn");
 const resetSelectorsBtn = document.getElementById("resetSelectorsBtn");
+const settingsToggleBtn = document.getElementById("settingsToggleBtn");
+const settingsPanel = document.getElementById("settingsPanel");
 const listingTargetEl = document.getElementById("listingTarget");
 const urlsBox = document.getElementById("urlsBox");
 const resultsBody = document.getElementById("resultsBody");
@@ -35,9 +37,16 @@ const selectorDefinitions = {
 let latestCompanyUrls = [];
 let latestRows = [];
 let selectorConfig = {};
+let settingsOpen = false;
 
 function setStatus(message) {
   statusEl.textContent = message;
+}
+
+function setSettingsOpen(nextOpen) {
+  settingsOpen = Boolean(nextOpen);
+  settingsPanel.classList.toggle("is-hidden", !settingsOpen);
+  settingsToggleBtn.textContent = settingsOpen ? "Hide settings" : "Settings";
 }
 
 function escapeHtml(value) {
@@ -392,6 +401,10 @@ resetSelectorsBtn.addEventListener("click", () => {
   resetSelectorConfig().catch((error) => {
     setStatus(`Could not reset selectors: ${error.message}`);
   });
+});
+
+settingsToggleBtn.addEventListener("click", () => {
+  setSettingsOpen(!settingsOpen);
 });
 
 selectorActionButtons.forEach((button) => {

@@ -7,13 +7,18 @@
   </head>
   <body>
     <main>
-      <h1>LinkedIn Company Extractor</h1>
-      <p class="hint">Fetch job listings + company links across pages, then enrich with company profile data.</p>
+      <div class="topbar">
+        <div>
+          <h1>LinkedIn Company Extractor</h1>
+          <p class="hint">Fetch job listings + company links across pages, then enrich with company profile data.</p>
+        </div>
+        <button id="settingsToggleBtn" type="button" class="secondary-btn">Settings</button>
+      </div>
 
       <label for="listingTarget">Number of listings to fetch</label>
       <input id="listingTarget" type="number" min="1" step="1" value="25" />
 
-      <section class="settings-panel">
+      <section id="settingsPanel" class="settings-panel is-hidden">
         <div class="settings-panel__header">
           <div>
             <h2>Selector settings</h2>

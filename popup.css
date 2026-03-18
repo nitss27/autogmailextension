@@ -11,6 +11,13 @@ main {
   gap: 10px;
 }
 
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
 h1 {
   font-size: 18px;
   margin: 0;
@@ -72,6 +79,10 @@ button {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.settings-panel.is-hidden {
+  display: none;
 }
 
 .settings-panel__header {

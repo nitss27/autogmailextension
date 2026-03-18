@@ -522,6 +522,88 @@ function uniqueSelector(selector, root = document) {
   }
 }
 
+function hasTargetMatch(selector, target, root = document) {
+  try {
+    const matches = Array.from(root.querySelectorAll(selector));
+    return matches.includes(target);
+  } catch {
+    return false;
+  }
+}
+
+function getStableClasses(el) {
+  return Array.from(el.classList).filter((name) => {
+    if (!name || /^ember/.test(name)) return false;
+    if (/^[a-f0-9]{6,}$/i.test(name)) return false;
+    if (/^[a-z0-9]{8,}$/i.test(name) && !name.includes("-") && !name.includes("_")) return false;
+    return true;
+  });
+}
+
+function buildRepeatedSelector(el) {
+  if (!(el instanceof Element)) return "";
+
+  const explicitCandidates = [];
+  if (el.matches('[data-view-name="job-search-job-card"]')) {
+    explicitCandidates.push('[data-view-name="job-search-job-card"]');
+  }
+  if (el.matches('.job-card-container[data-job-id]')) {
+    explicitCandidates.push('.job-card-container[data-job-id]');
+    explicitCandidates.push('[data-job-id]');
+  }
+  if (el.matches('li[data-occludable-job-id]')) {
+    explicitCandidates.push('li[data-occludable-job-id]');
+    explicitCandidates.push('[data-occludable-job-id]');
+  }
+
+  for (const candidate of explicitCandidates) {
+    if (hasTargetMatch(candidate, el) && document.querySelectorAll(candidate).length > 1) return candidate;
+  }
+
+  const tagName = el.tagName.toLowerCase();
+  const stableClasses = getStableClasses(el);
+  const repeatedCandidates = [];
+
+  if (stableClasses.length) {
+    repeatedCandidates.push(`${tagName}.${stableClasses[0]}`);
+    if (stableClasses.length > 1) {
+      repeatedCandidates.push(`${tagName}.${stableClasses.slice(0, 2).join(".")}`);
+    }
+  }
+
+  const preferredAttrs = ["data-view-name", "data-testid", "role"];
+  for (const attr of preferredAttrs) {
+    const value = el.getAttribute(attr);
+    if (!value) continue;
+    repeatedCandidates.unshift(`${tagName}[${attr}="${escapeAttributeValue(value)}"]`);
+  }
+
+  for (const candidate of repeatedCandidates) {
+    try {
+      const count = document.querySelectorAll(candidate).length;
+      if (count > 1 && hasTargetMatch(candidate, el)) return candidate;
+    } catch {
+      // ignore invalid candidate
+    }
+  }
+
+  const parent = el.parentElement;
+  if (parent) {
+    const parentClasses = getStableClasses(parent);
+    if (parentClasses.length && stableClasses.length) {
+      const candidate = `${parent.tagName.toLowerCase()}.${parentClasses[0]} > ${tagName}.${stableClasses[0]}`;
+      try {
+        const count = document.querySelectorAll(candidate).length;
+        if (count > 1 && hasTargetMatch(candidate, el)) return candidate;
+      } catch {
+        // ignore invalid candidate
+      }
+    }
+  }
+
+  return "";
+}
+
 function getGlobalSelectorCandidateForElement(el) {
   if (!(el instanceof Element)) return "";
 
@@ -539,7 +621,7 @@ function getGlobalSelectorCandidateForElement(el) {
     if (uniqueSelector(selector)) return selector;
   }
 
-  const classes = Array.from(el.classList).filter((name) => name && !/^ember/.test(name));
+  const classes = getStableClasses(el);
   if (classes.length) {
     const selector = `${el.tagName.toLowerCase()}.${classes.slice(0, 3).map(cssEscapeIdentifier).join(".")}`;
     if (uniqueSelector(selector)) return selector;
@@ -556,7 +638,7 @@ function getGlobalSelectorCandidateForElement(el) {
       break;
     }
 
-    const nodeClasses = Array.from(node.classList).filter((name) => name && !/^ember/.test(name));
+    const nodeClasses = getStableClasses(node);
     if (nodeClasses.length) {
       segment += `.${nodeClasses.slice(0, 2).map(cssEscapeIdentifier).join(".")}`;
     }
@@ -580,11 +662,21 @@ function buildRelativeSelector(root, target) {
   if (!(root instanceof Element) || !(target instanceof Element)) return "";
   if (root === target) return ":scope";
 
+  const exactRelativeCandidates = [
+    'a.job-card-list__title--link',
+    'a.job-card-container__link',
+    '[role="button"][componentkey^="job-card-component-ref-"]',
+    '[role="button"]'
+  ];
+  for (const candidate of exactRelativeCandidates) {
+    if (target.matches(candidate) || target.closest(candidate) === target) return candidate;
+  }
+
   const segments = [];
   let node = target;
   while (node && node !== root) {
     let segment = node.tagName.toLowerCase();
-    const classes = Array.from(node.classList).filter((name) => name && !/^ember/.test(name));
+    const classes = getStableClasses(node);
     const preferredAttrs = ["data-testid", "data-view-name", "componentkey", "aria-label", "role", "href"];
     let usedAttribute = false;
 
@@ -600,10 +692,26 @@ function buildRelativeSelector(root, target) {
       segment += `.${classes.slice(0, 2).map(cssEscapeIdentifier).join(".")}`;
     }
 
+    if (!usedAttribute && !classes.length && node.tagName.toLowerCase() === "a" && node.getAttribute("href")) {
+      const href = node.getAttribute("href");
+      if (href?.includes("/jobs/view/")) {
+        segment += '[href*="/jobs/view/"]';
+      }
+    }
+
     const parent = node.parentElement;
     if (parent) {
       const siblings = Array.from(parent.children).filter((child) => child.tagName === node.tagName);
-      if (siblings.length > 1) segment += `:nth-of-type(${siblings.indexOf(node) + 1})`;
+      const uniqueWithinParent = siblings.filter((child) => {
+        if (child === node) return true;
+        return child.matches(segment);
+      }).length === 1;
+      if (!uniqueWithinParent && siblings.length > 1) {
+        const plainSegment = node.tagName.toLowerCase();
+        if (siblings.filter((child) => child.matches(plainSegment)).length === 1) {
+          segment = plainSegment;
+        }
+      }
     }
 
     segments.unshift(segment);
@@ -646,6 +754,10 @@ function normalizePickedElement(selectorKey, target) {
 
 function getSelectorCandidateForElement(selectorKey, el) {
   const normalizedTarget = normalizePickedElement(selectorKey, el);
+
+  if (selectorKey === "jobCard") {
+    return buildRepeatedSelector(normalizedTarget) || getGlobalSelectorCandidateForElement(normalizedTarget);
+  }
 
   if (selectorKey === "jobCardClickable") {
     const cardRoot =
