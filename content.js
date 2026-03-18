@@ -171,6 +171,42 @@ function activateCard(card) {
   }
 }
 
+
+function getCurrentDetailsFingerprint(card) {
+  const details = extractJobDetails(card);
+  return JSON.stringify([
+    details.jobTitle || "",
+    details.jobUrl || "",
+    details.companyProfileUrl || "",
+    details.companyDisplayName || ""
+  ]);
+}
+
+async function activateCardAndWait(card, previousFingerprint = "") {
+  const candidates = getCardActivationCandidates(card);
+
+  for (const candidate of candidates) {
+    clickElement(candidate);
+
+    for (let i = 0; i < 8; i += 1) {
+      await sleep(250);
+      const nextFingerprint = getCurrentDetailsFingerprint(card);
+      const details = extractJobDetails(card);
+      const hasUsefulData = Boolean(details.jobTitle || details.companyProfileUrl || details.jobUrl);
+      const changed = nextFingerprint && nextFingerprint !== previousFingerprint;
+      if (hasUsefulData && (changed || !previousFingerprint)) {
+        return { clicked: true, details, fingerprint: nextFingerprint };
+      }
+    }
+  }
+
+  return {
+    clicked: false,
+    details: extractJobDetails(card),
+    fingerprint: getCurrentDetailsFingerprint(card)
+  };
+}
+
 function extractJobDetails(card) {
   const pane = document.querySelector('.jobs-search__job-details--container, [data-view-name="job-details"], main');
 
@@ -312,18 +348,24 @@ async function fetchAllCompanyUrlsFromJobList(listingTarget = 25) {
       const cardKey = getCardKey(card, i);
       if (seenCardKeys.has(cardKey)) continue;
 
-      const previousJobTitle = listings[listings.length - 1]?.jobTitle || "";
-      activateCard(card);
-      await sleep(450);
+      const previousFingerprint = listings[listings.length - 1]?.detailsFingerprint || "";
+      const activation = await activateCardAndWait(card, previousFingerprint);
+      if (!activation.clicked) {
+        continue;
+      }
 
-      const details = await collectAfterCardClick(card, previousJobTitle);
+      const previousJobTitle = listings[listings.length - 1]?.jobTitle || "";
+      const details = activation.details?.jobTitle || activation.details?.companyProfileUrl
+        ? activation.details
+        : await collectAfterCardClick(card, previousJobTitle);
       const companyProfileUrl = normalizeLinkedInCompanyUrl(details.companyProfileUrl || "") || "";
       if (companyProfileUrl) companyUrls.add(companyProfileUrl);
 
       listings.push({
         ...details,
         companyProfileUrl,
-        cardKey
+        cardKey,
+        detailsFingerprint: activation.fingerprint
       });
       seenCardKeys.add(cardKey);
     }
