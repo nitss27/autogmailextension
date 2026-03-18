@@ -62,8 +62,6 @@ function renderTable(rows) {
         <td>${escapeHtml(row.workType)}</td>
         <td>${escapeHtml(row.employmentType)}</td>
         <td>${escapeHtml(row.easyApply)}</td>
-        <td>${escapeHtml(row.aboutJob)}</td>
-        <td>${escapeHtml(row.featuredBenefits)}</td>
         <td>${escapeHtml(row.website)}</td>
         <td>${escapeHtml(row.industry)}</td>
         <td>${escapeHtml(row.companySize)}</td>
@@ -87,8 +85,6 @@ function rowsToTsv(rows) {
     "Work Type",
     "Employment Type",
     "Easy Apply",
-    "About Job",
-    "Featured Benefits",
     "Website",
     "Industry",
     "Company Size",
@@ -109,8 +105,6 @@ function rowsToTsv(rows) {
       row.workType,
       row.employmentType,
       row.easyApply,
-      row.aboutJob,
-      row.featuredBenefits,
       row.website,
       row.industry,
       row.companySize,

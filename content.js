@@ -250,6 +250,10 @@ function extractJobDetails(card) {
   const cardVisibleSpans = Array.from(card.querySelectorAll("span"))
     .map((el) => textOf(el))
     .filter(Boolean);
+  const cardAnchorTexts = Array.from(card.querySelectorAll("a"))
+    .map((el) => textOf(el))
+    .filter(Boolean);
+  const cardMetaTexts = [...cardParagraphs, ...cardVisibleSpans, ...cardAnchorTexts];
 
   const jobTitle =
     textOf(pane?.querySelector('a[href*="/jobs/view/"]')) ||
@@ -281,9 +285,13 @@ function extractJobDetails(card) {
 
   const applicantsText =
     textOf(pane?.querySelector("p.ba8b842d._6ae9bfc9.d051f947")) ||
+    cardMetaTexts.find((value) => /applicants?/i.test(value)) ||
     (metaLine.includes("applicant") ? metaLine : "");
 
-  const chips = Array.from(pane?.querySelectorAll('a[href*="jobs/search-results"], span') || []).map((el) => textOf(el));
+  const chips = [
+    ...Array.from(pane?.querySelectorAll('a[href*="jobs/search-results"], span') || []).map((el) => textOf(el)),
+    ...cardMetaTexts
+  ].filter(Boolean);
   const workType = chips.find((v) => /on-site|remote|hybrid/i.test(v)) || "";
   const employmentType = chips.find((v) => /full-time|part-time|contract|internship|temporary/i.test(v)) || "";
   const postedTime = chips.find((v) => /hour|day|week|month|ago/i.test(v)) || "";
@@ -329,8 +337,11 @@ async function collectAfterCardClick(card, previousSignature = "", rounds = 16) 
     const currentSignature = `${details.jobTitle}|${details.jobUrl}|${details.companyProfileUrl}`;
     const hasUsefulData = details.companyProfileUrl || details.jobTitle || details.jobUrl;
     const changedListing = currentSignature && currentSignature !== previousSignature;
-    const aboutReady = !details.hasAboutSection || Boolean(details.aboutJob);
-    if (hasUsefulData && aboutReady && (changedListing || !previousSignature || details.companyProfileUrl)) break;
+    const requiredLinksReady = Boolean(details.jobUrl && details.companyProfileUrl);
+    const requiredMetaReady = Boolean(details.applicants || details.employmentType || details.workType || details.postedTime);
+    if (hasUsefulData && requiredLinksReady && requiredMetaReady && (changedListing || !previousSignature || details.companyProfileUrl)) {
+      break;
+    }
     await sleep(300);
   }
 
