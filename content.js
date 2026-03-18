@@ -62,20 +62,47 @@ function getListContainer() {
 function clickElement(el) {
   if (!el) return;
   el.scrollIntoView({ behavior: "instant", block: "center" });
-  el.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
-  el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-  el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
-  el.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+  if (typeof el.focus === "function") {
+    el.focus({ preventScroll: true });
+  }
+
+  const events = ["pointerover", "mouseover", "pointerdown", "mousedown", "pointerup", "mouseup", "click"];
+  for (const type of events) {
+    const EventCtor = type.startsWith("pointer") ? PointerEvent : MouseEvent;
+    el.dispatchEvent(new EventCtor(type, { bubbles: true, cancelable: true, composed: true }));
+  }
+
+  if (typeof el.click === "function") {
+    el.click();
+  }
+
+  el.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true })
+  );
+  el.dispatchEvent(
+    new KeyboardEvent("keyup", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true })
+  );
+}
+
+function findCardActivationTarget(card) {
+  return (
+    card.matches?.('[role="button"][componentkey^="job-card-component-ref-"]') ? card : null
+  ) || (
+    card.querySelector('[role="button"][componentkey^="job-card-component-ref-"]')
+  ) || (
+    card.matches?.('[role="button"]') ? card : null
+  ) || (
+    card.querySelector('[role="button"]')
+  ) || (
+    card.querySelector("a.job-card-list__title--link")
+  ) || (
+    card.querySelector("a.job-card-container__link")
+  ) || card;
 }
 
 function activateCard(card) {
-  const target =
-    card.querySelector('[role="button"][componentkey^="job-card-component-ref-"]') ||
-    card.querySelector('[role="button"]') ||
-    card.querySelector("a.job-card-list__title--link") ||
-    card.querySelector("a.job-card-container__link") ||
-    card;
-
+  const target = findCardActivationTarget(card);
   clickElement(target);
 }
 
@@ -127,12 +154,14 @@ function extractJobDetails(card) {
   };
 }
 
-async function collectAfterCardClick(card, rounds = 12) {
+async function collectAfterCardClick(card, previousJobTitle = "", rounds = 12) {
   let details = null;
 
   for (let i = 0; i < rounds; i += 1) {
     details = extractJobDetails(card);
-    if (details.companyProfileUrl || details.jobTitle) break;
+    const hasUsefulData = details.companyProfileUrl || details.jobTitle;
+    const changedListing = details.jobTitle && details.jobTitle !== previousJobTitle;
+    if (hasUsefulData && (changedListing || !previousJobTitle)) break;
     await sleep(250);
   }
 
@@ -218,10 +247,11 @@ async function fetchAllCompanyUrlsFromJobList(listingTarget = 25) {
       const cardKey = getCardKey(card, i);
       if (seenCardKeys.has(cardKey)) continue;
 
+      const previousJobTitle = listings[listings.length - 1]?.jobTitle || "";
       activateCard(card);
-      await sleep(320);
+      await sleep(450);
 
-      const details = await collectAfterCardClick(card);
+      const details = await collectAfterCardClick(card, previousJobTitle);
       const companyProfileUrl = normalizeLinkedInCompanyUrl(details.companyProfileUrl || "") || "";
       if (companyProfileUrl) companyUrls.add(companyProfileUrl);
 
