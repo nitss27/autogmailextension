@@ -62,11 +62,7 @@ function normalizeLinkedInCompanyUrl(rawUrl) {
 
 async function loadSelectorConfig(force = false) {
   if (!force && selectorConfigCache && Object.keys(selectorConfigCache).length) return selectorConfigCache;
-
-  const stored = await chrome.storage.local.get([SELECTOR_CONFIG_STORAGE_KEY]);
-  selectorConfigCache = stored[SELECTOR_CONFIG_STORAGE_KEY] && typeof stored[SELECTOR_CONFIG_STORAGE_KEY] === "object"
-    ? stored[SELECTOR_CONFIG_STORAGE_KEY]
-    : {};
+  selectorConfigCache = {};
   return selectorConfigCache;
 }
 
@@ -101,7 +97,37 @@ function queryAll(selectors, root = document) {
 }
 
 function getJobCards() {
-  return queryAll(getSelectorList("jobCard"));
+  const listContainer = getListContainer() || document;
+  const selectorMatches = queryAll(getSelectorList("jobCard"), listContainer);
+  if (selectorMatches.length) return selectorMatches;
+
+  const jobLinks = Array.from(listContainer.querySelectorAll('a[href*="/jobs/view/"]'));
+  const uniqueCards = [];
+  const seen = new Set();
+
+  for (const link of jobLinks) {
+    let candidate = link;
+    let node = link;
+
+    while (node?.parentElement && node.parentElement !== listContainer) {
+      const parent = node.parentElement;
+      if (parent.querySelectorAll('a[href*="/jobs/view/"]').length > 1) break;
+      candidate = parent;
+      node = parent;
+    }
+
+    const key =
+      candidate.getAttribute("componentkey") ||
+      candidate.querySelector('[href*="/jobs/view/"]')?.getAttribute("href") ||
+      candidate.textContent?.slice(0, 120) ||
+      "";
+
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    uniqueCards.push(candidate);
+  }
+
+  return uniqueCards;
 }
 
 function getCardKey(card, index) {
