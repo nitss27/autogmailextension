@@ -16,6 +16,11 @@ h1 {
   margin: 0;
 }
 
+h2,
+h3 {
+  margin: 0;
+}
+
 .hint {
   margin: 0;
   color: #4f6f52;
@@ -50,6 +55,77 @@ textarea {
 button {
   padding: 8px;
   cursor: pointer;
+}
+
+.secondary-btn {
+  background: #f3f6fb;
+  border: 1px solid #c6d4ea;
+}
+
+.settings-panel {
+  border: 1px solid #dbe5f0;
+  border-radius: 10px;
+  padding: 12px;
+  background: #f8fbff;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.settings-panel__header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.settings-panel__header p {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: #486581;
+}
+
+.selector-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.selector-card {
+  border: 1px solid #d7e2ee;
+  border-radius: 8px;
+  padding: 10px;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.selector-card p {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: #5c6b7a;
+}
+
+.selector-value {
+  display: block;
+  margin-top: 8px;
+  padding: 6px;
+  border-radius: 6px;
+  background: #f3f6fb;
+  color: #17324d;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.pick-selector-btn {
+  align-self: flex-start;
+}
+
+.selector-help {
+  color: #294c69;
 }
 
 .table-wrap {

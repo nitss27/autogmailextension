@@ -2,13 +2,30 @@ const fetchBtn = document.getElementById("fetchBtn");
 const processBtn = document.getElementById("processBtn");
 const copyBtn = document.getElementById("copyBtn");
 const clearBtn = document.getElementById("clearBtn");
+const resetSelectorsBtn = document.getElementById("resetSelectorsBtn");
 const listingTargetEl = document.getElementById("listingTarget");
 const urlsBox = document.getElementById("urlsBox");
 const resultsBody = document.getElementById("resultsBody");
 const statusEl = document.getElementById("status");
+const pickSelectorButtons = Array.from(document.querySelectorAll(".pick-selector-btn"));
+
+const selectorLabels = {
+  jobCard: "Listing card",
+  jobCardClickable: "Listing click target",
+  jobDetailsPane: "Job details pane",
+  paginationNext: "Next page button"
+};
+
+const selectorValueEls = {
+  jobCard: document.getElementById("jobCardSelectorValue"),
+  jobCardClickable: document.getElementById("jobCardClickableSelectorValue"),
+  jobDetailsPane: document.getElementById("jobDetailsPaneSelectorValue"),
+  paginationNext: document.getElementById("paginationNextSelectorValue")
+};
 
 let latestCompanyUrls = [];
 let latestRows = [];
+let selectorConfig = {};
 
 function setStatus(message) {
   statusEl.textContent = message;
@@ -19,8 +36,15 @@ function escapeHtml(value) {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
+    .replace(/\"/g, "&quot;")
     .replace(/'/g, "&#039;");
+}
+
+function renderSelectorConfig() {
+  for (const [key, el] of Object.entries(selectorValueEls)) {
+    const value = selectorConfig[key];
+    el.textContent = value || "Using built-in defaults";
+  }
 }
 
 function getListingTarget() {
@@ -130,21 +154,52 @@ async function persistState() {
     listingTarget: listingTargetEl.value,
     latestCompanyUrls,
     latestRows,
-    urlsBoxValue: urlsBox.value
+    urlsBoxValue: urlsBox.value,
+    selectorConfig
   });
 }
 
 async function restoreState() {
-  const state = await chrome.storage.local.get(["listingTarget", "latestCompanyUrls", "latestRows", "urlsBoxValue"]);
+  const state = await chrome.storage.local.get([
+    "listingTarget",
+    "latestCompanyUrls",
+    "latestRows",
+    "urlsBoxValue",
+    "selectorConfig"
+  ]);
   if (state.listingTarget) listingTargetEl.value = state.listingTarget;
   latestCompanyUrls = Array.isArray(state.latestCompanyUrls) ? state.latestCompanyUrls : [];
   latestRows = Array.isArray(state.latestRows) ? state.latestRows : [];
+  selectorConfig = state.selectorConfig && typeof state.selectorConfig === "object" ? state.selectorConfig : {};
   if (typeof state.urlsBoxValue === "string") {
     urlsBox.value = state.urlsBoxValue;
   } else if (latestCompanyUrls.length) {
     urlsBox.value = latestCompanyUrls.join("\n");
   }
+  renderSelectorConfig();
   renderTable(latestRows);
+}
+
+async function startSelectorPicker(selectorKey) {
+  const tabId = await getActiveTabId();
+  const label = selectorLabels[selectorKey] || selectorKey;
+  const response = await chrome.tabs.sendMessage(tabId, {
+    type: "START_SELECTOR_PICK",
+    payload: { selectorKey }
+  });
+
+  if (!response?.ok) {
+    throw new Error(response?.error || `Failed to start picker for ${label}`);
+  }
+
+  setStatus(`Picker started for ${label}. Hover LinkedIn to see the highlighted boundary, click the target element to save it, or press Esc to cancel.`);
+}
+
+async function resetSelectorConfig() {
+  selectorConfig = {};
+  renderSelectorConfig();
+  await chrome.storage.local.set({ selectorConfig });
+  setStatus("Selector settings reset. The extension will use built-in defaults on the next run.");
 }
 
 fetchBtn.addEventListener("click", async () => {
@@ -168,11 +223,13 @@ fetchBtn.addEventListener("click", async () => {
 
     latestRows = (response.listings || []).map((listing) => ({
       ...listing,
-      status: "fetched"
+      status: listing.status || "fetched"
     }));
     renderTable(latestRows);
 
-    setStatus(`Fetched ${response.listingsProcessed || 0} listings / ${latestCompanyUrls.length} company URLs across ${response.pagesVisited || 1} pages.`);
+    setStatus(
+      `Fetched ${response.listingsProcessed || 0} listings / ${latestCompanyUrls.length} company URLs across ${response.pagesVisited || 1} pages.`
+    );
     await persistState();
   } catch (error) {
     setStatus(`Fetch failed: ${error.message}`);
@@ -253,7 +310,40 @@ clearBtn.addEventListener("click", async () => {
   urlsBox.value = "";
   renderTable([]);
   await chrome.storage.local.clear();
-  setStatus("Cleared links, table, and saved data.");
+  selectorConfig = {};
+  renderSelectorConfig();
+  setStatus("Cleared links, table, selector settings, and saved data.");
+});
+
+resetSelectorsBtn.addEventListener("click", () => {
+  resetSelectorConfig().catch((error) => {
+    setStatus(`Could not reset selectors: ${error.message}`);
+  });
+});
+
+pickSelectorButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    const selectorKey = button.dataset.selectorKey;
+    startSelectorPicker(selectorKey).catch((error) => {
+      setStatus(`Selector picker failed: ${error.message}`);
+    });
+  });
+});
+
+chrome.runtime.onMessage.addListener((message) => {
+  if (message?.type === "SELECTOR_PICKED") {
+    const { selectorKey, selector } = message.payload || {};
+    if (!selectorKey) return;
+    selectorConfig = { ...selectorConfig, [selectorKey]: selector };
+    renderSelectorConfig();
+    persistState().catch(() => {});
+    setStatus(`${selectorLabels[selectorKey] || selectorKey} saved: ${selector}`);
+  }
+
+  if (message?.type === "SELECTOR_PICK_CANCELLED") {
+    const { selectorKey } = message.payload || {};
+    setStatus(`${selectorLabels[selectorKey] || selectorKey} picker cancelled.`);
+  }
 });
 
 restoreState().catch(() => {});

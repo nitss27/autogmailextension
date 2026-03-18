@@ -13,6 +13,56 @@
       <label for="listingTarget">Number of listings to fetch</label>
       <input id="listingTarget" type="number" min="1" step="1" value="25" />
 
+      <section class="settings-panel">
+        <div class="settings-panel__header">
+          <div>
+            <h2>Selector settings</h2>
+            <p>Pick the live LinkedIn elements the scraper should use. The selected CSS selectors are saved locally and reused on future runs.</p>
+          </div>
+          <button id="resetSelectorsBtn" type="button" class="secondary-btn">Reset defaults</button>
+        </div>
+
+        <div class="selector-list">
+          <article class="selector-card">
+            <div>
+              <h3>Listing card</h3>
+              <p>Select a full job listing card from the left results list.</p>
+              <code id="jobCardSelectorValue" class="selector-value">Using built-in defaults</code>
+            </div>
+            <button data-selector-key="jobCard" class="pick-selector-btn" type="button">Pick element</button>
+          </article>
+
+          <article class="selector-card">
+            <div>
+              <h3>Listing click target</h3>
+              <p>Select the exact clickable title/row element that should open the listing details.</p>
+              <code id="jobCardClickableSelectorValue" class="selector-value">Using built-in defaults</code>
+            </div>
+            <button data-selector-key="jobCardClickable" class="pick-selector-btn" type="button">Pick element</button>
+          </article>
+
+          <article class="selector-card">
+            <div>
+              <h3>Job details pane</h3>
+              <p>Select the details container that updates after each listing click.</p>
+              <code id="jobDetailsPaneSelectorValue" class="selector-value">Using built-in defaults</code>
+            </div>
+            <button data-selector-key="jobDetailsPane" class="pick-selector-btn" type="button">Pick element</button>
+          </article>
+
+          <article class="selector-card">
+            <div>
+              <h3>Next page button</h3>
+              <p>Select the pagination button used to move to the next results page.</p>
+              <code id="paginationNextSelectorValue" class="selector-value">Using built-in defaults</code>
+            </div>
+            <button data-selector-key="paginationNext" class="pick-selector-btn" type="button">Pick element</button>
+          </article>
+        </div>
+
+        <p class="hint selector-help">When you click <strong>Pick element</strong>, move your mouse over LinkedIn to see a highlight border, then click the target element. Press <strong>Esc</strong> to cancel.</p>
+      </section>
+
       <div class="actions">
         <button id="fetchBtn">Fetch Listings</button>
         <button id="processBtn">Process Company Profiles</button>

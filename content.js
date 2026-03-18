@@ -1,3 +1,29 @@
+const SELECTOR_CONFIG_STORAGE_KEY = "selectorConfig";
+const selectorDefaults = {
+  jobCard: [
+    '[data-view-name="job-search-job-card"]',
+    '.job-card-container[data-job-id]',
+    'li[data-occludable-job-id] .job-card-container'
+  ],
+  jobCardClickable: [
+    '[role="button"][componentkey^="job-card-component-ref-"]',
+    'a.job-card-list__title--link',
+    'a.job-card-container__link',
+    '[role="button"]'
+  ],
+  paginationNext: [
+    'button[data-testid="pagination-controls-next-button-visible"]',
+    'button[data-testid="pagination-controls-next-button"]',
+    'button.jobs-search-pagination__button--next[aria-label*="View next page"]',
+    'button.jobs-search-pagination__button--next',
+    'button[aria-label="View next page"]'
+  ],
+  jobDetailsPane: ['.jobs-search__job-details--container', '[data-view-name="job-details"]', 'main']
+};
+
+let selectorConfigCache = {};
+let pickerSession = null;
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -24,12 +50,50 @@ function normalizeLinkedInCompanyUrl(rawUrl) {
   }
 }
 
+async function loadSelectorConfig(force = false) {
+  if (!force && selectorConfigCache && Object.keys(selectorConfigCache).length) {
+    return selectorConfigCache;
+  }
+
+  const stored = await chrome.storage.local.get([SELECTOR_CONFIG_STORAGE_KEY]);
+  selectorConfigCache = stored[SELECTOR_CONFIG_STORAGE_KEY] && typeof stored[SELECTOR_CONFIG_STORAGE_KEY] === "object"
+    ? stored[SELECTOR_CONFIG_STORAGE_KEY]
+    : {};
+  return selectorConfigCache;
+}
+
+function getSelectorList(key) {
+  const custom = selectorConfigCache[key];
+  if (typeof custom === "string" && custom.trim()) return [custom.trim()];
+  return selectorDefaults[key] || [];
+}
+
+function queryFirst(selectors, root = document) {
+  for (const selector of selectors) {
+    try {
+      const match = root.querySelector(selector);
+      if (match) return match;
+    } catch {
+      // ignore invalid selector
+    }
+  }
+  return null;
+}
+
+function queryAll(selectors, root = document) {
+  for (const selector of selectors) {
+    try {
+      const matches = Array.from(root.querySelectorAll(selector));
+      if (matches.length) return matches;
+    } catch {
+      // ignore invalid selector
+    }
+  }
+  return [];
+}
+
 function getJobCards() {
-  return Array.from(
-    document.querySelectorAll(
-      '[data-view-name="job-search-job-card"], .job-card-container[data-job-id], li[data-occludable-job-id] .job-card-container'
-    )
-  );
+  return queryAll(getSelectorList("jobCard"));
 }
 
 function getCardKey(card, index) {
@@ -86,6 +150,9 @@ function clickElement(el) {
 }
 
 function findCardActivationTarget(card) {
+  const customTarget = queryFirst(getSelectorList("jobCardClickable"), card);
+  if (customTarget) return customTarget;
+
   return (
     card.matches?.('[role="button"][componentkey^="job-card-component-ref-"]') ? card : null
   ) || (
@@ -101,13 +168,36 @@ function findCardActivationTarget(card) {
   ) || card;
 }
 
-function activateCard(card) {
+async function activateCard(card) {
   const target = findCardActivationTarget(card);
+  const detailsPaneBefore = getJobDetailsPane();
+  const beforeHtml = detailsPaneBefore?.innerHTML?.slice(0, 500) || "";
+  const beforeSelected = card.getAttribute("aria-current") || card.getAttribute("aria-selected") || card.className;
+
   clickElement(target);
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    await sleep(250);
+
+    const detailsPaneAfter = getJobDetailsPane();
+    const afterHtml = detailsPaneAfter?.innerHTML?.slice(0, 500) || "";
+    const afterSelected = card.getAttribute("aria-current") || card.getAttribute("aria-selected") || card.className;
+
+    if (afterHtml && afterHtml !== beforeHtml) return true;
+    if (afterSelected !== beforeSelected) return true;
+
+    clickElement(target);
+  }
+
+  return false;
+}
+
+function getJobDetailsPane() {
+  return queryFirst(getSelectorList("jobDetailsPane"));
 }
 
 function extractJobDetails(card) {
-  const pane = document.querySelector('.jobs-search__job-details--container, [data-view-name="job-details"], main');
+  const pane = getJobDetailsPane();
 
   const jobTitle =
     textOf(pane?.querySelector('a[href*="/jobs/view/"]')) ||
@@ -154,15 +244,15 @@ function extractJobDetails(card) {
   };
 }
 
-async function collectAfterCardClick(card, previousJobTitle = "", rounds = 12) {
+async function collectAfterCardClick(card, previousJobTitle = "", rounds = 14) {
   let details = null;
 
   for (let i = 0; i < rounds; i += 1) {
     details = extractJobDetails(card);
-    const hasUsefulData = details.companyProfileUrl || details.jobTitle;
+    const hasUsefulData = details.companyProfileUrl || details.jobTitle || details.jobUrl;
     const changedListing = details.jobTitle && details.jobTitle !== previousJobTitle;
-    if (hasUsefulData && (changedListing || !previousJobTitle)) break;
-    await sleep(250);
+    if (hasUsefulData && (changedListing || !previousJobTitle || details.companyProfileUrl)) break;
+    await sleep(300);
   }
 
   return details || extractJobDetails(card);
@@ -193,20 +283,7 @@ async function scrollJobListToEnd() {
 }
 
 function findNextPaginationButton() {
-  const selectors = [
-    'button[data-testid="pagination-controls-next-button-visible"]',
-    'button[data-testid="pagination-controls-next-button"]',
-    'button.jobs-search-pagination__button--next[aria-label*="View next page"]',
-    'button.jobs-search-pagination__button--next',
-    'button[aria-label="View next page"]'
-  ];
-
-  for (const selector of selectors) {
-    const button = document.querySelector(selector);
-    if (button) return button;
-  }
-
-  return null;
+  return queryFirst(getSelectorList("paginationNext"));
 }
 
 async function clickNextPageIfAvailable() {
@@ -229,6 +306,8 @@ async function clickNextPageIfAvailable() {
 }
 
 async function fetchAllCompanyUrlsFromJobList(listingTarget = 25) {
+  await loadSelectorConfig(true);
+
   const companyUrls = new Set();
   const listings = [];
   const seenCardKeys = new Set();
@@ -248,8 +327,8 @@ async function fetchAllCompanyUrlsFromJobList(listingTarget = 25) {
       if (seenCardKeys.has(cardKey)) continue;
 
       const previousJobTitle = listings[listings.length - 1]?.jobTitle || "";
-      activateCard(card);
-      await sleep(450);
+      const clicked = await activateCard(card);
+      await sleep(clicked ? 550 : 800);
 
       const details = await collectAfterCardClick(card, previousJobTitle);
       const companyProfileUrl = normalizeLinkedInCompanyUrl(details.companyProfileUrl || "") || "";
@@ -258,6 +337,7 @@ async function fetchAllCompanyUrlsFromJobList(listingTarget = 25) {
       listings.push({
         ...details,
         companyProfileUrl,
+        status: companyProfileUrl || details.jobTitle ? "fetched" : "missing-details",
         cardKey
       });
       seenCardKeys.add(cardKey);
@@ -292,7 +372,6 @@ function normalizeWebsiteHref(rawHref) {
 
     if (lower.startsWith("tel:") || lower.startsWith("mailto:") || lower.startsWith("javascript:")) return "";
 
-    // Handle LinkedIn redirect wrappers that carry real external URL in query params.
     if (url.hostname.includes("linkedin.com")) {
       const nested = url.searchParams.get("url") || url.searchParams.get("redirect") || url.searchParams.get("u");
       if (nested) {
@@ -307,7 +386,6 @@ function normalizeWebsiteHref(rawHref) {
         }
       }
 
-      // direct LinkedIn URLs are not company websites
       return "";
     }
 
@@ -316,10 +394,6 @@ function normalizeWebsiteHref(rawHref) {
   } catch {
     return "";
   }
-}
-
-function isLikelyWebsiteUrl(href) {
-  return Boolean(normalizeWebsiteHref(href));
 }
 
 function readAboutDefinitionList() {
@@ -417,8 +491,192 @@ async function extractCompanyDataFromCurrentPage() {
   };
 }
 
+function cssEscapeValue(value) {
+  if (window.CSS?.escape) return window.CSS.escape(value);
+  return String(value).replace(/[^a-zA-Z0-9_-]/g, "\\$&");
+}
+
+function uniqueSelector(selector) {
+  try {
+    return document.querySelectorAll(selector).length === 1;
+  } catch {
+    return false;
+  }
+}
+
+function getSelectorCandidateForElement(el) {
+  if (!(el instanceof Element)) return "";
+
+  const id = el.getAttribute("id");
+  if (id) {
+    const selector = `#${cssEscapeValue(id)}`;
+    if (uniqueSelector(selector)) return selector;
+  }
+
+  const preferredAttrs = ["data-testid", "data-view-name", "data-job-id", "componentkey", "aria-label", "role"];
+  for (const attr of preferredAttrs) {
+    const value = el.getAttribute(attr);
+    if (!value) continue;
+    const selector = `${el.tagName.toLowerCase()}[${attr}="${cssEscapeValue(value)}"]`;
+    if (uniqueSelector(selector)) return selector;
+  }
+
+  const classes = Array.from(el.classList).filter((name) => name && !/^ember/.test(name));
+  if (classes.length) {
+    const selector = `${el.tagName.toLowerCase()}.${classes.slice(0, 3).map(cssEscapeValue).join(".")}`;
+    if (uniqueSelector(selector)) return selector;
+  }
+
+  const segments = [];
+  let node = el;
+  while (node && node.nodeType === Node.ELEMENT_NODE && node !== document.body) {
+    let segment = node.tagName.toLowerCase();
+    const nodeId = node.getAttribute("id");
+    if (nodeId) {
+      segment = `#${cssEscapeValue(nodeId)}`;
+      segments.unshift(segment);
+      break;
+    }
+
+    const nodeClasses = Array.from(node.classList).filter((name) => name && !/^ember/.test(name));
+    if (nodeClasses.length) {
+      segment += `.${nodeClasses.slice(0, 2).map(cssEscapeValue).join(".")}`;
+    }
+
+    const parent = node.parentElement;
+    if (parent) {
+      const siblings = Array.from(parent.children).filter((child) => child.tagName === node.tagName);
+      if (siblings.length > 1) {
+        const nth = siblings.indexOf(node) + 1;
+        segment += `:nth-of-type(${nth})`;
+      }
+    }
+
+    segments.unshift(segment);
+    const candidate = segments.join(" > ");
+    if (uniqueSelector(candidate)) return candidate;
+    node = node.parentElement;
+  }
+
+  return segments.join(" > ");
+}
+
+function removePickerSession(notifyCancelled = false) {
+  if (!pickerSession) return;
+
+  document.removeEventListener("mousemove", pickerSession.onMouseMove, true);
+  document.removeEventListener("click", pickerSession.onClick, true);
+  document.removeEventListener("keydown", pickerSession.onKeyDown, true);
+  pickerSession.overlay?.remove();
+
+  const cancelledKey = pickerSession.selectorKey;
+  pickerSession = null;
+
+  if (notifyCancelled) {
+    chrome.runtime.sendMessage({
+      type: "SELECTOR_PICK_CANCELLED",
+      payload: { selectorKey: cancelledKey }
+    }).catch(() => {});
+  }
+}
+
+function updatePickerOverlay(target) {
+  if (!pickerSession?.overlay || !(target instanceof Element)) return;
+  const rect = target.getBoundingClientRect();
+  const overlay = pickerSession.overlay;
+  overlay.style.display = "block";
+  overlay.style.left = `${rect.left + window.scrollX}px`;
+  overlay.style.top = `${rect.top + window.scrollY}px`;
+  overlay.style.width = `${rect.width}px`;
+  overlay.style.height = `${rect.height}px`;
+  overlay.textContent = `${selectorDefaults[pickerSession.selectorKey] ? pickerSession.selectorKey : "element"}`;
+}
+
+async function savePickedSelector(selectorKey, selector) {
+  await loadSelectorConfig(true);
+  selectorConfigCache = {
+    ...selectorConfigCache,
+    [selectorKey]: selector
+  };
+  await chrome.storage.local.set({ [SELECTOR_CONFIG_STORAGE_KEY]: selectorConfigCache });
+  chrome.runtime.sendMessage({
+    type: "SELECTOR_PICKED",
+    payload: { selectorKey, selector }
+  }).catch(() => {});
+}
+
+function startSelectorPicker(selectorKey) {
+  removePickerSession(false);
+
+  const overlay = document.createElement("div");
+  overlay.setAttribute("data-linkedin-extractor-picker", "true");
+  Object.assign(overlay.style, {
+    position: "absolute",
+    zIndex: "2147483647",
+    pointerEvents: "none",
+    border: "2px solid #0a66c2",
+    background: "rgba(10, 102, 194, 0.12)",
+    boxSizing: "border-box",
+    display: "none",
+    color: "#0a66c2",
+    fontSize: "12px",
+    fontWeight: "700",
+    padding: "2px 4px"
+  });
+  document.documentElement.appendChild(overlay);
+
+  const session = {
+    selectorKey,
+    overlay,
+    currentTarget: null,
+    onMouseMove(event) {
+      const target = document.elementFromPoint(event.clientX, event.clientY);
+      if (!target || target === overlay) return;
+      session.currentTarget = target;
+      updatePickerOverlay(target);
+    },
+    onClick(event) {
+      if (!(session.currentTarget instanceof Element)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+
+      const selector = getSelectorCandidateForElement(session.currentTarget);
+      removePickerSession(false);
+      savePickedSelector(selectorKey, selector).catch(() => {});
+    },
+    onKeyDown(event) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      removePickerSession(true);
+    }
+  };
+
+  pickerSession = session;
+  document.addEventListener("mousemove", session.onMouseMove, true);
+  document.addEventListener("click", session.onClick, true);
+  document.addEventListener("keydown", session.onKeyDown, true);
+}
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== "local" || !changes[SELECTOR_CONFIG_STORAGE_KEY]) return;
+  selectorConfigCache = changes[SELECTOR_CONFIG_STORAGE_KEY].newValue || {};
+});
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message?.type) return;
+
+  if (message.type === "START_SELECTOR_PICK") {
+    const selectorKey = message.payload?.selectorKey;
+    if (!selectorKey || !selectorDefaults[selectorKey]) {
+      sendResponse({ ok: false, error: "Unknown selector key" });
+      return true;
+    }
+
+    startSelectorPicker(selectorKey);
+    sendResponse({ ok: true });
+    return true;
+  }
 
   if (message.type === "FETCH_ALL_COMPANY_URLS") {
     (async () => {
