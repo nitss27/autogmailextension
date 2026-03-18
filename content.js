@@ -208,12 +208,42 @@ async function activateCardAndWait(card, previousFingerprint = "") {
   };
 }
 
+function extractCardLocalDetails(card) {
+  const textNodes = Array.from(card.querySelectorAll("p, span")).map((el) => textOf(el)).filter(Boolean);
+  const postedTime = textNodes.find((v) => /hour|day|week|month|ago/i.test(v)) || "";
+  const location =
+    textOf(card.querySelector("p._270d69ec._2c2c3dd4._6c91228e")) ||
+    textNodes.find((v) => /\(|remote|hybrid|on-site|united states|india|ca|ny|tx/i.test(v)) ||
+    "";
+  const companyDisplayName =
+    textOf(card.querySelector("div._6c91228e p")) ||
+    textOf(card.querySelector("p._270d69ec._2c2c3dd4")) ||
+    "";
+  const applicants = textNodes.find((v) => /applicant/i.test(v)) || "";
+  const workType = textNodes.find((v) => /on-site|remote|hybrid/i.test(v)) || "";
+  const employmentType = textNodes.find((v) => /full-time|part-time|contract|internship|temporary/i.test(v)) || "";
+  const easyApply = textNodes.some((v) => /easy apply|apply/i.test(v)) ? "Yes" : "No";
+
+  return {
+    companyDisplayName,
+    location,
+    postedTime,
+    applicants,
+    workType,
+    employmentType,
+    easyApply
+  };
+}
+
 function extractJobDetails(card) {
   const pane = document.querySelector('.jobs-search__job-details--container, [data-view-name="job-details"], main');
+  const local = extractCardLocalDetails(card);
 
   const jobTitle =
     textOf(pane?.querySelector('a[href*="/jobs/view/"]')) ||
-    textOf(card.querySelector('a.job-card-list__title--link, a[href*="/jobs/view/"]'));
+    textOf(card.querySelector('a.job-card-list__title--link, a[href*="/jobs/view/"]')) ||
+    textOf(card.querySelector("p span.d5843e4c")) ||
+    textOf(card.querySelector("p._270d69ec"));
 
   const jobUrlRaw =
     pane?.querySelector('a[href*="/jobs/view/"]')?.href ||
@@ -226,33 +256,29 @@ function extractJobDetails(card) {
     card.querySelector('a[href*="/company/"]');
 
   const companyProfileUrl = normalizeLinkedInCompanyUrl(companyAnchor?.href || "") || "";
-  const companyDisplayName = textOf(companyAnchor) || textOf(card.querySelector('p a[href*="/company/"]'));
+  const companyDisplayName = textOf(companyAnchor) || textOf(card.querySelector('p a[href*="/company/"]')) || local.companyDisplayName;
 
-  const metaLine =
-    textOf(pane?.querySelector("p.ba8b842d._6ae9bfc9")) ||
-    textOf(card.querySelector(".job-card-container__metadata-wrapper"));
+  const paneMeta = textOf(pane?.querySelector("p.ba8b842d._6ae9bfc9"));
+  const location = local.location || paneMeta || textOf(card.querySelector(".job-card-container__metadata-wrapper"));
 
-  const applicantsText =
-    textOf(pane?.querySelector("p.ba8b842d._6ae9bfc9.d051f947")) ||
-    (metaLine.includes("applicant") ? metaLine : "");
-
+  const paneApplicants = textOf(pane?.querySelector("p.ba8b842d._6ae9bfc9.d051f947"));
   const chips = Array.from(pane?.querySelectorAll('a[href*="jobs/search-results"], span') || []).map((el) => textOf(el));
-  const workType = chips.find((v) => /on-site|remote|hybrid/i.test(v)) || "";
-  const employmentType = chips.find((v) => /full-time|part-time|contract|internship|temporary/i.test(v)) || "";
-  const postedTime = chips.find((v) => /hour|day|week|month|ago/i.test(v)) || "";
-  const easyApply = chips.some((v) => /easy apply/i.test(v)) || !!pane?.querySelector('[aria-label*="Easy Apply"]');
+  const paneWorkType = chips.find((v) => /on-site|remote|hybrid/i.test(v)) || "";
+  const paneEmploymentType = chips.find((v) => /full-time|part-time|contract|internship|temporary/i.test(v)) || "";
+  const panePostedTime = chips.find((v) => /hour|day|week|month|ago/i.test(v)) || "";
+  const paneEasyApply = chips.some((v) => /easy apply/i.test(v)) || !!pane?.querySelector('[aria-label*="Easy Apply"]');
 
   return {
     jobTitle,
     jobUrl,
     companyDisplayName,
     companyProfileUrl,
-    location: metaLine,
-    postedTime,
-    applicants: applicantsText,
-    workType,
-    employmentType,
-    easyApply: easyApply ? "Yes" : "No"
+    location,
+    postedTime: local.postedTime || panePostedTime,
+    applicants: local.applicants || paneApplicants || (location.includes("applicant") ? location : ""),
+    workType: local.workType || paneWorkType,
+    employmentType: local.employmentType || paneEmploymentType,
+    easyApply: local.easyApply === "Yes" || paneEasyApply ? "Yes" : "No"
   };
 }
 
