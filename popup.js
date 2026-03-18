@@ -134,6 +134,51 @@ async function persistState() {
   });
 }
 
+async function processCompanyProfiles() {
+  const inputUrls = parseUrlsFromBox();
+  latestCompanyUrls = inputUrls.length ? inputUrls : latestCompanyUrls;
+  if (!latestCompanyUrls.length) throw new Error("No company URLs found. Run Fetch Listings first.");
+
+  setStatus(`Processing ${latestCompanyUrls.length} company profiles...`);
+  const response = await chrome.runtime.sendMessage({
+    type: "PROCESS_COMPANY_URLS",
+    payload: { companyUrls: latestCompanyUrls }
+  });
+
+  if (!response?.ok) throw new Error(response?.error || "Failed to process company profiles");
+
+  const companyMap = new Map();
+  for (const p of response.companyProfiles || []) {
+    const key = (p.companyLinkedInUrl || "").replace(/\/+$/, "");
+    if (key) companyMap.set(key, p);
+  }
+
+  latestRows = latestRows.map((row) => {
+    const key = (row.companyProfileUrl || row.companyLinkedInUrl || "").replace(/\/+$/, "");
+    const company = companyMap.get(key);
+    return {
+      ...row,
+      companyName: company?.companyName || row.companyName || "",
+      companyLinkedInUrl: company?.companyLinkedInUrl || row.companyProfileUrl || row.companyLinkedInUrl || "",
+      website: company?.website || "",
+      industry: company?.industry || "",
+      companySize: company?.companySize || "",
+      headquarters: company?.headquarters || "",
+      specialties: company?.specialties || "",
+      verifiedPageDate: company?.verifiedPageDate || "",
+      status: company?.status || "fetched"
+    };
+  });
+
+  if (!latestRows.length) {
+    latestRows = (response.companyProfiles || []).map((p) => ({ ...p, status: p.status || "ok" }));
+  }
+
+  renderTable(latestRows);
+  setStatus(`Done. Processed ${response.processedCount} company profiles.`);
+  await persistState();
+}
+
 async function restoreState() {
   const state = await chrome.storage.local.get(["listingTarget", "latestCompanyUrls", "latestRows", "urlsBoxValue"]);
   if (state.listingTarget) listingTargetEl.value = state.listingTarget;
@@ -172,8 +217,11 @@ fetchBtn.addEventListener("click", async () => {
     }));
     renderTable(latestRows);
 
-    setStatus(`Fetched ${response.listingsProcessed || 0} listings / ${latestCompanyUrls.length} company URLs across ${response.pagesVisited || 1} pages.`);
+    setStatus(`Fetched ${response.listingsProcessed || 0} listings / ${latestCompanyUrls.length} company URLs across ${response.pagesVisited || 1} pages. Starting company processing...`);
     await persistState();
+    if (latestCompanyUrls.length) {
+      await processCompanyProfiles();
+    }
   } catch (error) {
     setStatus(`Fetch failed: ${error.message}`);
   } finally {
@@ -186,49 +234,7 @@ processBtn.addEventListener("click", async () => {
   try {
     fetchBtn.disabled = true;
     processBtn.disabled = true;
-
-    const inputUrls = parseUrlsFromBox();
-    latestCompanyUrls = inputUrls.length ? inputUrls : latestCompanyUrls;
-    if (!latestCompanyUrls.length) throw new Error("No company URLs found. Run Fetch Listings first.");
-
-    setStatus(`Processing ${latestCompanyUrls.length} company profiles...`);
-    const response = await chrome.runtime.sendMessage({
-      type: "PROCESS_COMPANY_URLS",
-      payload: { companyUrls: latestCompanyUrls }
-    });
-
-    if (!response?.ok) throw new Error(response?.error || "Failed to process company profiles");
-
-    const companyMap = new Map();
-    for (const p of response.companyProfiles || []) {
-      const key = (p.companyLinkedInUrl || "").replace(/\/+$/, "");
-      if (key) companyMap.set(key, p);
-    }
-
-    latestRows = latestRows.map((row) => {
-      const key = (row.companyProfileUrl || row.companyLinkedInUrl || "").replace(/\/+$/, "");
-      const company = companyMap.get(key);
-      return {
-        ...row,
-        companyName: company?.companyName || row.companyName || "",
-        companyLinkedInUrl: company?.companyLinkedInUrl || row.companyProfileUrl || row.companyLinkedInUrl || "",
-        website: company?.website || "",
-        industry: company?.industry || "",
-        companySize: company?.companySize || "",
-        headquarters: company?.headquarters || "",
-        specialties: company?.specialties || "",
-        verifiedPageDate: company?.verifiedPageDate || "",
-        status: company?.status || "fetched"
-      };
-    });
-
-    if (!latestRows.length) {
-      latestRows = (response.companyProfiles || []).map((p) => ({ ...p, status: p.status || "ok" }));
-    }
-
-    renderTable(latestRows);
-    setStatus(`Done. Processed ${response.processedCount} company profiles.`);
-    await persistState();
+    await processCompanyProfiles();
   } catch (error) {
     setStatus(`Process failed: ${error.message}`);
   } finally {
