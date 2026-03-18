@@ -17,50 +17,74 @@
         <div class="settings-panel__header">
           <div>
             <h2>Selector settings</h2>
-            <p>Pick the live LinkedIn elements the scraper should use. The selected CSS selectors are saved locally and reused on future runs.</p>
+            <p>Pick or edit the LinkedIn selectors used by the scraper. Saved selectors are reused on future runs.</p>
           </div>
           <button id="resetSelectorsBtn" type="button" class="secondary-btn">Reset defaults</button>
         </div>
 
         <div class="selector-list">
-          <article class="selector-card">
+          <article class="selector-card" data-selector-key="jobCard">
             <div>
               <h3>Listing card</h3>
-              <p>Select a full job listing card from the left results list.</p>
-              <code id="jobCardSelectorValue" class="selector-value">Using built-in defaults</code>
+              <p>Select the full job card from the left search-results list.</p>
             </div>
-            <button data-selector-key="jobCard" class="pick-selector-btn" type="button">Pick element</button>
+            <textarea id="jobCardSelectorInput" class="selector-input" rows="3" placeholder="Use built-in defaults"></textarea>
+            <code id="jobCardSelectorValue" class="selector-value">Using built-in defaults</code>
+            <div class="selector-actions">
+              <button data-action="pick" data-selector-key="jobCard" type="button">Pick element</button>
+              <button data-action="test" data-selector-key="jobCard" type="button" class="secondary-btn">Test</button>
+              <button data-action="save" data-selector-key="jobCard" type="button" class="secondary-btn">Save</button>
+              <button data-action="clear" data-selector-key="jobCard" type="button" class="secondary-btn">Clear</button>
+            </div>
           </article>
 
-          <article class="selector-card">
+          <article class="selector-card" data-selector-key="jobCardClickable">
             <div>
               <h3>Listing click target</h3>
-              <p>Select the exact clickable title/row element that should open the listing details.</p>
-              <code id="jobCardClickableSelectorValue" class="selector-value">Using built-in defaults</code>
+              <p>Select the exact clickable title or row element that opens the job details.</p>
             </div>
-            <button data-selector-key="jobCardClickable" class="pick-selector-btn" type="button">Pick element</button>
+            <textarea id="jobCardClickableSelectorInput" class="selector-input" rows="3" placeholder="Use built-in defaults"></textarea>
+            <code id="jobCardClickableSelectorValue" class="selector-value">Using built-in defaults</code>
+            <div class="selector-actions">
+              <button data-action="pick" data-selector-key="jobCardClickable" type="button">Pick element</button>
+              <button data-action="test" data-selector-key="jobCardClickable" type="button" class="secondary-btn">Test</button>
+              <button data-action="save" data-selector-key="jobCardClickable" type="button" class="secondary-btn">Save</button>
+              <button data-action="clear" data-selector-key="jobCardClickable" type="button" class="secondary-btn">Clear</button>
+            </div>
           </article>
 
-          <article class="selector-card">
+          <article class="selector-card" data-selector-key="jobDetailsPane">
             <div>
               <h3>Job details pane</h3>
-              <p>Select the details container that updates after each listing click.</p>
-              <code id="jobDetailsPaneSelectorValue" class="selector-value">Using built-in defaults</code>
+              <p>Select the details container that changes after each listing click.</p>
             </div>
-            <button data-selector-key="jobDetailsPane" class="pick-selector-btn" type="button">Pick element</button>
+            <textarea id="jobDetailsPaneSelectorInput" class="selector-input" rows="3" placeholder="Use built-in defaults"></textarea>
+            <code id="jobDetailsPaneSelectorValue" class="selector-value">Using built-in defaults</code>
+            <div class="selector-actions">
+              <button data-action="pick" data-selector-key="jobDetailsPane" type="button">Pick element</button>
+              <button data-action="test" data-selector-key="jobDetailsPane" type="button" class="secondary-btn">Test</button>
+              <button data-action="save" data-selector-key="jobDetailsPane" type="button" class="secondary-btn">Save</button>
+              <button data-action="clear" data-selector-key="jobDetailsPane" type="button" class="secondary-btn">Clear</button>
+            </div>
           </article>
 
-          <article class="selector-card">
+          <article class="selector-card" data-selector-key="paginationNext">
             <div>
               <h3>Next page button</h3>
-              <p>Select the pagination button used to move to the next results page.</p>
-              <code id="paginationNextSelectorValue" class="selector-value">Using built-in defaults</code>
+              <p>Select the pagination control that moves to the next results page.</p>
             </div>
-            <button data-selector-key="paginationNext" class="pick-selector-btn" type="button">Pick element</button>
+            <textarea id="paginationNextSelectorInput" class="selector-input" rows="3" placeholder="Use built-in defaults"></textarea>
+            <code id="paginationNextSelectorValue" class="selector-value">Using built-in defaults</code>
+            <div class="selector-actions">
+              <button data-action="pick" data-selector-key="paginationNext" type="button">Pick element</button>
+              <button data-action="test" data-selector-key="paginationNext" type="button" class="secondary-btn">Test</button>
+              <button data-action="save" data-selector-key="paginationNext" type="button" class="secondary-btn">Save</button>
+              <button data-action="clear" data-selector-key="paginationNext" type="button" class="secondary-btn">Clear</button>
+            </div>
           </article>
         </div>
 
-        <p class="hint selector-help">When you click <strong>Pick element</strong>, move your mouse over LinkedIn to see a highlight border, then click the target element. Press <strong>Esc</strong> to cancel.</p>
+        <p class="hint selector-help">Use <strong>Pick element</strong> to hover LinkedIn with a highlighted boundary guide, then click the element to save it. Press <strong>Esc</strong> to cancel the picker.</p>
       </section>
 
       <div class="actions">

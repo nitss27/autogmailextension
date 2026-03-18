@@ -21,6 +21,7 @@ const selectorDefaults = {
   jobDetailsPane: ['.jobs-search__job-details--container', '[data-view-name="job-details"]', 'main']
 };
 
+const selectorTestPreviewLength = 120;
 let selectorConfigCache = {};
 let pickerSession = null;
 
@@ -30,6 +31,10 @@ function sleep(ms) {
 
 function textOf(el) {
   return el?.textContent?.replace(/\s+/g, " ").trim() || "";
+}
+
+function previewText(el) {
+  return textOf(el).slice(0, selectorTestPreviewLength);
 }
 
 function normalizeLinkedInCompanyUrl(rawUrl) {
@@ -51,9 +56,7 @@ function normalizeLinkedInCompanyUrl(rawUrl) {
 }
 
 async function loadSelectorConfig(force = false) {
-  if (!force && selectorConfigCache && Object.keys(selectorConfigCache).length) {
-    return selectorConfigCache;
-  }
+  if (!force && selectorConfigCache && Object.keys(selectorConfigCache).length) return selectorConfigCache;
 
   const stored = await chrome.storage.local.get([SELECTOR_CONFIG_STORAGE_KEY]);
   selectorConfigCache = stored[SELECTOR_CONFIG_STORAGE_KEY] && typeof stored[SELECTOR_CONFIG_STORAGE_KEY] === "object"
@@ -141,12 +144,21 @@ function clickElement(el) {
     el.click();
   }
 
-  el.dispatchEvent(
-    new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true })
-  );
-  el.dispatchEvent(
-    new KeyboardEvent("keyup", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true })
-  );
+  el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
+  el.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
+}
+
+function getJobDetailsPane() {
+  return queryFirst(getSelectorList("jobDetailsPane"));
+}
+
+function getDetailsSignature() {
+  const pane = getJobDetailsPane();
+  if (!pane) return "";
+
+  const jobHref = pane.querySelector('a[href*="/jobs/view/"]')?.href || "";
+  const companyHref = pane.querySelector('a[href*="/company/"]')?.href || "";
+  return `${jobHref}|${companyHref}|${previewText(pane).slice(0, 180)}`;
 }
 
 function findCardActivationTarget(card) {
@@ -170,30 +182,21 @@ function findCardActivationTarget(card) {
 
 async function activateCard(card) {
   const target = findCardActivationTarget(card);
-  const detailsPaneBefore = getJobDetailsPane();
-  const beforeHtml = detailsPaneBefore?.innerHTML?.slice(0, 500) || "";
+  const signatureBefore = getDetailsSignature();
   const beforeSelected = card.getAttribute("aria-current") || card.getAttribute("aria-selected") || card.className;
 
-  clickElement(target);
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    clickElement(target);
+    await sleep(275);
 
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    await sleep(250);
-
-    const detailsPaneAfter = getJobDetailsPane();
-    const afterHtml = detailsPaneAfter?.innerHTML?.slice(0, 500) || "";
+    const signatureAfter = getDetailsSignature();
     const afterSelected = card.getAttribute("aria-current") || card.getAttribute("aria-selected") || card.className;
 
-    if (afterHtml && afterHtml !== beforeHtml) return true;
+    if (signatureAfter && signatureAfter !== signatureBefore) return true;
     if (afterSelected !== beforeSelected) return true;
-
-    clickElement(target);
   }
 
   return false;
-}
-
-function getJobDetailsPane() {
-  return queryFirst(getSelectorList("jobDetailsPane"));
 }
 
 function extractJobDetails(card) {
@@ -209,10 +212,7 @@ function extractJobDetails(card) {
     "";
   const jobUrl = jobUrlRaw ? new URL(jobUrlRaw, window.location.origin).href : "";
 
-  const companyAnchor =
-    pane?.querySelector('a[href*="/company/"]') ||
-    card.querySelector('a[href*="/company/"]');
-
+  const companyAnchor = pane?.querySelector('a[href*="/company/"]') || card.querySelector('a[href*="/company/"]');
   const companyProfileUrl = normalizeLinkedInCompanyUrl(companyAnchor?.href || "") || "";
   const companyDisplayName = textOf(companyAnchor) || textOf(card.querySelector('p a[href*="/company/"]'));
 
@@ -244,14 +244,15 @@ function extractJobDetails(card) {
   };
 }
 
-async function collectAfterCardClick(card, previousJobTitle = "", rounds = 14) {
+async function collectAfterCardClick(card, previousSignature = "", rounds = 16) {
   let details = null;
 
   for (let i = 0; i < rounds; i += 1) {
     details = extractJobDetails(card);
+    const currentSignature = `${details.jobTitle}|${details.jobUrl}|${details.companyProfileUrl}`;
     const hasUsefulData = details.companyProfileUrl || details.jobTitle || details.jobUrl;
-    const changedListing = details.jobTitle && details.jobTitle !== previousJobTitle;
-    if (hasUsefulData && (changedListing || !previousJobTitle || details.companyProfileUrl)) break;
+    const changedListing = currentSignature && currentSignature !== previousSignature;
+    if (hasUsefulData && (changedListing || !previousSignature || details.companyProfileUrl)) break;
     await sleep(300);
   }
 
@@ -288,10 +289,7 @@ function findNextPaginationButton() {
 
 async function clickNextPageIfAvailable() {
   const nextBtn = findNextPaginationButton();
-
-  if (!nextBtn || nextBtn.disabled || nextBtn.getAttribute("aria-disabled") === "true") {
-    return false;
-  }
+  if (!nextBtn || nextBtn.disabled || nextBtn.getAttribute("aria-disabled") === "true") return false;
 
   const firstBefore = getCardKey(getJobCards()[0], 0);
   clickElement(nextBtn);
@@ -311,6 +309,7 @@ async function fetchAllCompanyUrlsFromJobList(listingTarget = 25) {
   const companyUrls = new Set();
   const listings = [];
   const seenCardKeys = new Set();
+  const warnings = [];
   let pagesVisited = 0;
   const maxPages = 50;
 
@@ -319,6 +318,12 @@ async function fetchAllCompanyUrlsFromJobList(listingTarget = 25) {
     await scrollJobListToEnd();
 
     const cards = getJobCards();
+    if (!cards.length) {
+      throw new Error("No job cards found on the current LinkedIn page. Save a custom Listing card selector in settings and test it.");
+    }
+
+    let pageSuccessfulOpenCount = 0;
+
     for (let i = 0; i < cards.length; i += 1) {
       if (listings.length >= listingTarget) break;
 
@@ -326,27 +331,40 @@ async function fetchAllCompanyUrlsFromJobList(listingTarget = 25) {
       const cardKey = getCardKey(card, i);
       if (seenCardKeys.has(cardKey)) continue;
 
-      const previousJobTitle = listings[listings.length - 1]?.jobTitle || "";
+      const previousRow = listings[listings.length - 1];
+      const previousSignature = previousRow ? `${previousRow.jobTitle}|${previousRow.jobUrl}|${previousRow.companyProfileUrl}` : "";
       const clicked = await activateCard(card);
-      await sleep(clicked ? 550 : 800);
+      await sleep(clicked ? 600 : 900);
 
-      const details = await collectAfterCardClick(card, previousJobTitle);
+      const details = await collectAfterCardClick(card, previousSignature);
       const companyProfileUrl = normalizeLinkedInCompanyUrl(details.companyProfileUrl || "") || "";
       if (companyProfileUrl) companyUrls.add(companyProfileUrl);
+
+      const status = companyProfileUrl || details.jobTitle || details.jobUrl ? "fetched" : "missing-details";
+      if (status === "fetched") pageSuccessfulOpenCount += 1;
 
       listings.push({
         ...details,
         companyProfileUrl,
-        status: companyProfileUrl || details.jobTitle ? "fetched" : "missing-details",
+        status,
         cardKey
       });
       seenCardKeys.add(cardKey);
     }
 
+    if (!pageSuccessfulOpenCount) {
+      throw new Error(
+        `The scraper could not open any listings on page ${pagesVisited}. Save/test the Listing click target and Job details pane selectors in Settings before running again.`
+      );
+    }
+
     if (listings.length >= listingTarget) break;
 
     const movedToNextPage = await clickNextPageIfAvailable();
-    if (!movedToNextPage) break;
+    if (!movedToNextPage) {
+      warnings.push(`Stopped after page ${pagesVisited} because the next-page button was unavailable or did not change the results list.`);
+      break;
+    }
 
     await sleep(1200);
   }
@@ -355,7 +373,8 @@ async function fetchAllCompanyUrlsFromJobList(listingTarget = 25) {
     companyUrls: Array.from(companyUrls),
     listings,
     listingsProcessed: listings.length,
-    pagesVisited
+    pagesVisited,
+    warnings
   };
 }
 
@@ -369,7 +388,6 @@ function normalizeWebsiteHref(rawHref) {
   try {
     const url = new URL(rawHref, window.location.origin);
     const lower = url.href.toLowerCase();
-
     if (lower.startsWith("tel:") || lower.startsWith("mailto:") || lower.startsWith("javascript:")) return "";
 
     if (url.hostname.includes("linkedin.com")) {
@@ -378,14 +396,11 @@ function normalizeWebsiteHref(rawHref) {
         try {
           const decoded = decodeURIComponent(nested);
           const nestedUrl = new URL(decoded);
-          if (nestedUrl.protocol === "http:" || nestedUrl.protocol === "https:") {
-            return nestedUrl.href;
-          }
+          if (nestedUrl.protocol === "http:" || nestedUrl.protocol === "https:") return nestedUrl.href;
         } catch {
           // keep falling through
         }
       }
-
       return "";
     }
 
@@ -437,7 +452,7 @@ function pickWebsiteFromFieldMap(fieldMap) {
     if (/^https?:\/\//i.test(txt)) return txt;
   }
 
-  const fallbackAnchors = Array.from(document.querySelectorAll('dl a[href]'));
+  const fallbackAnchors = Array.from(document.querySelectorAll("dl a[href]"));
   for (const a of fallbackAnchors) {
     const href = a.getAttribute("href") || "";
     const normalized = normalizeWebsiteHref(href);
@@ -468,7 +483,6 @@ async function extractCompanyDataFromCurrentPage() {
 
   const fieldMap = readAboutDefinitionList();
   const companyLinkedInUrl = normalizeLinkedInCompanyUrl(window.location.href) || window.location.href;
-
   const companyName =
     cleanFieldText(document.querySelector("h1")?.textContent) ||
     cleanFieldText(document.querySelector(".org-top-card-summary__title")?.textContent) ||
@@ -491,25 +505,29 @@ async function extractCompanyDataFromCurrentPage() {
   };
 }
 
-function cssEscapeValue(value) {
+function cssEscapeIdentifier(value) {
   if (window.CSS?.escape) return window.CSS.escape(value);
   return String(value).replace(/[^a-zA-Z0-9_-]/g, "\\$&");
 }
 
-function uniqueSelector(selector) {
+function escapeAttributeValue(value) {
+  return String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+function uniqueSelector(selector, root = document) {
   try {
-    return document.querySelectorAll(selector).length === 1;
+    return root.querySelectorAll(selector).length === 1;
   } catch {
     return false;
   }
 }
 
-function getSelectorCandidateForElement(el) {
+function getGlobalSelectorCandidateForElement(el) {
   if (!(el instanceof Element)) return "";
 
   const id = el.getAttribute("id");
   if (id) {
-    const selector = `#${cssEscapeValue(id)}`;
+    const selector = `#${cssEscapeIdentifier(id)}`;
     if (uniqueSelector(selector)) return selector;
   }
 
@@ -517,13 +535,13 @@ function getSelectorCandidateForElement(el) {
   for (const attr of preferredAttrs) {
     const value = el.getAttribute(attr);
     if (!value) continue;
-    const selector = `${el.tagName.toLowerCase()}[${attr}="${cssEscapeValue(value)}"]`;
+    const selector = `${el.tagName.toLowerCase()}[${attr}="${escapeAttributeValue(value)}"]`;
     if (uniqueSelector(selector)) return selector;
   }
 
   const classes = Array.from(el.classList).filter((name) => name && !/^ember/.test(name));
   if (classes.length) {
-    const selector = `${el.tagName.toLowerCase()}.${classes.slice(0, 3).map(cssEscapeValue).join(".")}`;
+    const selector = `${el.tagName.toLowerCase()}.${classes.slice(0, 3).map(cssEscapeIdentifier).join(".")}`;
     if (uniqueSelector(selector)) return selector;
   }
 
@@ -533,23 +551,20 @@ function getSelectorCandidateForElement(el) {
     let segment = node.tagName.toLowerCase();
     const nodeId = node.getAttribute("id");
     if (nodeId) {
-      segment = `#${cssEscapeValue(nodeId)}`;
+      segment = `#${cssEscapeIdentifier(nodeId)}`;
       segments.unshift(segment);
       break;
     }
 
     const nodeClasses = Array.from(node.classList).filter((name) => name && !/^ember/.test(name));
     if (nodeClasses.length) {
-      segment += `.${nodeClasses.slice(0, 2).map(cssEscapeValue).join(".")}`;
+      segment += `.${nodeClasses.slice(0, 2).map(cssEscapeIdentifier).join(".")}`;
     }
 
     const parent = node.parentElement;
     if (parent) {
       const siblings = Array.from(parent.children).filter((child) => child.tagName === node.tagName);
-      if (siblings.length > 1) {
-        const nth = siblings.indexOf(node) + 1;
-        segment += `:nth-of-type(${nth})`;
-      }
+      if (siblings.length > 1) segment += `:nth-of-type(${siblings.indexOf(node) + 1})`;
     }
 
     segments.unshift(segment);
@@ -561,12 +576,99 @@ function getSelectorCandidateForElement(el) {
   return segments.join(" > ");
 }
 
+function buildRelativeSelector(root, target) {
+  if (!(root instanceof Element) || !(target instanceof Element)) return "";
+  if (root === target) return ":scope";
+
+  const segments = [];
+  let node = target;
+  while (node && node !== root) {
+    let segment = node.tagName.toLowerCase();
+    const classes = Array.from(node.classList).filter((name) => name && !/^ember/.test(name));
+    const preferredAttrs = ["data-testid", "data-view-name", "componentkey", "aria-label", "role", "href"];
+    let usedAttribute = false;
+
+    for (const attr of preferredAttrs) {
+      const value = node.getAttribute(attr);
+      if (!value) continue;
+      segment += `[${attr}="${escapeAttributeValue(value)}"]`;
+      usedAttribute = true;
+      break;
+    }
+
+    if (!usedAttribute && classes.length) {
+      segment += `.${classes.slice(0, 2).map(cssEscapeIdentifier).join(".")}`;
+    }
+
+    const parent = node.parentElement;
+    if (parent) {
+      const siblings = Array.from(parent.children).filter((child) => child.tagName === node.tagName);
+      if (siblings.length > 1) segment += `:nth-of-type(${siblings.indexOf(node) + 1})`;
+    }
+
+    segments.unshift(segment);
+    const candidate = `:scope > ${segments.join(" > ")}`;
+    if (uniqueSelector(candidate, root)) return candidate;
+    node = node.parentElement;
+  }
+
+  return segments.length ? `:scope > ${segments.join(" > ")}` : ":scope";
+}
+
+function normalizePickedElement(selectorKey, target) {
+  if (!(target instanceof Element)) return target;
+
+  if (selectorKey === "jobCard") {
+    return (
+      target.closest('[data-view-name="job-search-job-card"]') ||
+      target.closest(".job-card-container[data-job-id]") ||
+      target.closest("li[data-occludable-job-id]") ||
+      target.closest("li") ||
+      target
+    );
+  }
+
+  if (selectorKey === "jobCardClickable") {
+    return target;
+  }
+
+  if (selectorKey === "jobDetailsPane") {
+    return (
+      target.closest('.jobs-search__job-details--container') ||
+      target.closest('[data-view-name="job-details"]') ||
+      target.closest("main") ||
+      target
+    );
+  }
+
+  return target;
+}
+
+function getSelectorCandidateForElement(selectorKey, el) {
+  const normalizedTarget = normalizePickedElement(selectorKey, el);
+
+  if (selectorKey === "jobCardClickable") {
+    const cardRoot =
+      normalizedTarget.closest('[data-view-name="job-search-job-card"]') ||
+      normalizedTarget.closest(".job-card-container[data-job-id]") ||
+      normalizedTarget.closest("li[data-occludable-job-id]") ||
+      normalizedTarget.closest("li");
+
+    if (cardRoot && cardRoot !== normalizedTarget) {
+      return buildRelativeSelector(cardRoot, normalizedTarget);
+    }
+  }
+
+  return getGlobalSelectorCandidateForElement(normalizedTarget);
+}
+
 function removePickerSession(notifyCancelled = false) {
   if (!pickerSession) return;
 
   document.removeEventListener("mousemove", pickerSession.onMouseMove, true);
   document.removeEventListener("click", pickerSession.onClick, true);
   document.removeEventListener("keydown", pickerSession.onKeyDown, true);
+  window.removeEventListener("scroll", pickerSession.onScroll, true);
   pickerSession.overlay?.remove();
 
   const cancelledKey = pickerSession.selectorKey;
@@ -585,24 +687,19 @@ function updatePickerOverlay(target) {
   const rect = target.getBoundingClientRect();
   const overlay = pickerSession.overlay;
   overlay.style.display = "block";
-  overlay.style.left = `${rect.left + window.scrollX}px`;
-  overlay.style.top = `${rect.top + window.scrollY}px`;
+  overlay.style.position = "fixed";
+  overlay.style.left = `${rect.left}px`;
+  overlay.style.top = `${rect.top}px`;
   overlay.style.width = `${rect.width}px`;
   overlay.style.height = `${rect.height}px`;
-  overlay.textContent = `${selectorDefaults[pickerSession.selectorKey] ? pickerSession.selectorKey : "element"}`;
+  overlay.textContent = pickerSession.label;
 }
 
 async function savePickedSelector(selectorKey, selector) {
   await loadSelectorConfig(true);
-  selectorConfigCache = {
-    ...selectorConfigCache,
-    [selectorKey]: selector
-  };
+  selectorConfigCache = { ...selectorConfigCache, [selectorKey]: selector };
   await chrome.storage.local.set({ [SELECTOR_CONFIG_STORAGE_KEY]: selectorConfigCache });
-  chrome.runtime.sendMessage({
-    type: "SELECTOR_PICKED",
-    payload: { selectorKey, selector }
-  }).catch(() => {});
+  chrome.runtime.sendMessage({ type: "SELECTOR_PICKED", payload: { selectorKey, selector } }).catch(() => {});
 }
 
 function startSelectorPicker(selectorKey) {
@@ -611,7 +708,7 @@ function startSelectorPicker(selectorKey) {
   const overlay = document.createElement("div");
   overlay.setAttribute("data-linkedin-extractor-picker", "true");
   Object.assign(overlay.style, {
-    position: "absolute",
+    position: "fixed",
     zIndex: "2147483647",
     pointerEvents: "none",
     border: "2px solid #0a66c2",
@@ -627,13 +724,14 @@ function startSelectorPicker(selectorKey) {
 
   const session = {
     selectorKey,
+    label: selectorKey,
     overlay,
     currentTarget: null,
     onMouseMove(event) {
       const target = document.elementFromPoint(event.clientX, event.clientY);
       if (!target || target === overlay) return;
-      session.currentTarget = target;
-      updatePickerOverlay(target);
+      session.currentTarget = normalizePickedElement(selectorKey, target);
+      updatePickerOverlay(session.currentTarget);
     },
     onClick(event) {
       if (!(session.currentTarget instanceof Element)) return;
@@ -641,7 +739,7 @@ function startSelectorPicker(selectorKey) {
       event.stopPropagation();
       event.stopImmediatePropagation();
 
-      const selector = getSelectorCandidateForElement(session.currentTarget);
+      const selector = getSelectorCandidateForElement(selectorKey, session.currentTarget);
       removePickerSession(false);
       savePickedSelector(selectorKey, selector).catch(() => {});
     },
@@ -649,6 +747,9 @@ function startSelectorPicker(selectorKey) {
       if (event.key !== "Escape") return;
       event.preventDefault();
       removePickerSession(true);
+    },
+    onScroll() {
+      if (session.currentTarget) updatePickerOverlay(session.currentTarget);
     }
   };
 
@@ -656,6 +757,23 @@ function startSelectorPicker(selectorKey) {
   document.addEventListener("mousemove", session.onMouseMove, true);
   document.addEventListener("click", session.onClick, true);
   document.addEventListener("keydown", session.onKeyDown, true);
+  window.addEventListener("scroll", session.onScroll, true);
+}
+
+function testSelector(selector) {
+  try {
+    const matches = Array.from(document.querySelectorAll(selector));
+    return {
+      ok: true,
+      count: matches.length,
+      preview: matches[0] ? previewText(matches[0]) : ""
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error.message || "Invalid selector"
+    };
+  }
 }
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
@@ -675,6 +793,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     startSelectorPicker(selectorKey);
     sendResponse({ ok: true });
+    return true;
+  }
+
+  if (message.type === "TEST_SELECTOR") {
+    const selector = String(message.payload?.selector || "").trim();
+    if (!selector) {
+      sendResponse({ ok: false, error: "Missing selector to test" });
+      return true;
+    }
+
+    const result = testSelector(selector);
+    sendResponse(result);
     return true;
   }
 

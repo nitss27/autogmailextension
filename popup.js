@@ -7,20 +7,29 @@ const listingTargetEl = document.getElementById("listingTarget");
 const urlsBox = document.getElementById("urlsBox");
 const resultsBody = document.getElementById("resultsBody");
 const statusEl = document.getElementById("status");
-const pickSelectorButtons = Array.from(document.querySelectorAll(".pick-selector-btn"));
+const selectorActionButtons = Array.from(document.querySelectorAll("[data-action][data-selector-key]"));
 
-const selectorLabels = {
-  jobCard: "Listing card",
-  jobCardClickable: "Listing click target",
-  jobDetailsPane: "Job details pane",
-  paginationNext: "Next page button"
-};
-
-const selectorValueEls = {
-  jobCard: document.getElementById("jobCardSelectorValue"),
-  jobCardClickable: document.getElementById("jobCardClickableSelectorValue"),
-  jobDetailsPane: document.getElementById("jobDetailsPaneSelectorValue"),
-  paginationNext: document.getElementById("paginationNextSelectorValue")
+const selectorDefinitions = {
+  jobCard: {
+    label: "Listing card",
+    input: document.getElementById("jobCardSelectorInput"),
+    value: document.getElementById("jobCardSelectorValue")
+  },
+  jobCardClickable: {
+    label: "Listing click target",
+    input: document.getElementById("jobCardClickableSelectorInput"),
+    value: document.getElementById("jobCardClickableSelectorValue")
+  },
+  jobDetailsPane: {
+    label: "Job details pane",
+    input: document.getElementById("jobDetailsPaneSelectorInput"),
+    value: document.getElementById("jobDetailsPaneSelectorValue")
+  },
+  paginationNext: {
+    label: "Next page button",
+    input: document.getElementById("paginationNextSelectorInput"),
+    value: document.getElementById("paginationNextSelectorValue")
+  }
 };
 
 let latestCompanyUrls = [];
@@ -40,10 +49,19 @@ function escapeHtml(value) {
     .replace(/'/g, "&#039;");
 }
 
+function getSelectorValue(selectorKey, { preferInput = true } = {}) {
+  const definition = selectorDefinitions[selectorKey];
+  if (!definition) return "";
+  const inputValue = definition.input.value.trim();
+  if (preferInput && inputValue) return inputValue;
+  return String(selectorConfig[selectorKey] || "").trim();
+}
+
 function renderSelectorConfig() {
-  for (const [key, el] of Object.entries(selectorValueEls)) {
-    const value = selectorConfig[key];
-    el.textContent = value || "Using built-in defaults";
+  for (const [key, definition] of Object.entries(selectorDefinitions)) {
+    const savedValue = String(selectorConfig[key] || "").trim();
+    definition.input.value = savedValue;
+    definition.value.textContent = savedValue || "Using built-in defaults";
   }
 }
 
@@ -180,25 +198,80 @@ async function restoreState() {
   renderTable(latestRows);
 }
 
+async function saveSelector(selectorKey) {
+  const definition = selectorDefinitions[selectorKey];
+  if (!definition) throw new Error("Unknown selector setting.");
+
+  const selector = definition.input.value.trim();
+  if (!selector) {
+    delete selectorConfig[selectorKey];
+  } else {
+    selectorConfig = {
+      ...selectorConfig,
+      [selectorKey]: selector
+    };
+  }
+
+  if (!selector) {
+    const nextConfig = { ...selectorConfig };
+    delete nextConfig[selectorKey];
+    selectorConfig = nextConfig;
+  }
+
+  renderSelectorConfig();
+  await persistState();
+  setStatus(`${definition.label} ${selector ? "saved" : "cleared"}.`);
+}
+
+async function clearSelector(selectorKey) {
+  const definition = selectorDefinitions[selectorKey];
+  if (!definition) return;
+  definition.input.value = "";
+  await saveSelector(selectorKey);
+}
+
 async function startSelectorPicker(selectorKey) {
   const tabId = await getActiveTabId();
-  const label = selectorLabels[selectorKey] || selectorKey;
+  const definition = selectorDefinitions[selectorKey];
   const response = await chrome.tabs.sendMessage(tabId, {
     type: "START_SELECTOR_PICK",
     payload: { selectorKey }
   });
 
   if (!response?.ok) {
-    throw new Error(response?.error || `Failed to start picker for ${label}`);
+    throw new Error(response?.error || `Failed to start picker for ${definition?.label || selectorKey}`);
   }
 
-  setStatus(`Picker started for ${label}. Hover LinkedIn to see the highlighted boundary, click the target element to save it, or press Esc to cancel.`);
+  setStatus(`Picker started for ${definition?.label || selectorKey}. Hover LinkedIn to see the highlighted boundary, click the target element to save it, or press Esc to cancel.`);
+}
+
+async function testSelector(selectorKey) {
+  const selector = getSelectorValue(selectorKey);
+  const definition = selectorDefinitions[selectorKey];
+  if (!selector) {
+    setStatus(`${definition?.label || selectorKey}: using built-in defaults, so there is no custom selector to test.`);
+    return;
+  }
+
+  const tabId = await getActiveTabId();
+  const response = await chrome.tabs.sendMessage(tabId, {
+    type: "TEST_SELECTOR",
+    payload: { selectorKey, selector }
+  });
+
+  if (!response?.ok) {
+    throw new Error(response?.error || "Selector test failed.");
+  }
+
+  setStatus(
+    `${definition?.label || selectorKey} test: matched ${response.count} element(s). ${response.preview ? `First match: ${response.preview}` : ""}`.trim()
+  );
 }
 
 async function resetSelectorConfig() {
   selectorConfig = {};
   renderSelectorConfig();
-  await chrome.storage.local.set({ selectorConfig });
+  await persistState();
   setStatus("Selector settings reset. The extension will use built-in defaults on the next run.");
 }
 
@@ -220,15 +293,15 @@ fetchBtn.addEventListener("click", async () => {
 
     latestCompanyUrls = response.companyUrls || [];
     urlsBox.value = latestCompanyUrls.join("\n");
-
     latestRows = (response.listings || []).map((listing) => ({
       ...listing,
       status: listing.status || "fetched"
     }));
     renderTable(latestRows);
 
+    const warning = response.warnings?.length ? ` Warnings: ${response.warnings.join(" | ")}` : "";
     setStatus(
-      `Fetched ${response.listingsProcessed || 0} listings / ${latestCompanyUrls.length} company URLs across ${response.pagesVisited || 1} pages.`
+      `Fetched ${response.listingsProcessed || 0} listings / ${latestCompanyUrls.length} company URLs across ${response.pagesVisited || 1} pages.${warning}`
     );
     await persistState();
   } catch (error) {
@@ -275,7 +348,7 @@ processBtn.addEventListener("click", async () => {
         headquarters: company?.headquarters || "",
         specialties: company?.specialties || "",
         verifiedPageDate: company?.verifiedPageDate || "",
-        status: company?.status || "fetched"
+        status: company?.status || row.status || "fetched"
       };
     });
 
@@ -308,10 +381,10 @@ clearBtn.addEventListener("click", async () => {
   latestCompanyUrls = [];
   latestRows = [];
   urlsBox.value = "";
-  renderTable([]);
-  await chrome.storage.local.clear();
   selectorConfig = {};
+  renderTable([]);
   renderSelectorConfig();
+  await chrome.storage.local.clear();
   setStatus("Cleared links, table, selector settings, and saved data.");
 });
 
@@ -321,11 +394,23 @@ resetSelectorsBtn.addEventListener("click", () => {
   });
 });
 
-pickSelectorButtons.forEach((button) => {
+selectorActionButtons.forEach((button) => {
   button.addEventListener("click", () => {
+    const action = button.dataset.action;
     const selectorKey = button.dataset.selectorKey;
-    startSelectorPicker(selectorKey).catch((error) => {
-      setStatus(`Selector picker failed: ${error.message}`);
+
+    const actionMap = {
+      pick: () => startSelectorPicker(selectorKey),
+      test: () => testSelector(selectorKey),
+      save: () => saveSelector(selectorKey),
+      clear: () => clearSelector(selectorKey)
+    };
+
+    const handler = actionMap[action];
+    if (!handler) return;
+
+    handler().catch((error) => {
+      setStatus(`${selectorDefinitions[selectorKey]?.label || selectorKey} ${action} failed: ${error.message}`);
     });
   });
 });
@@ -333,16 +418,17 @@ pickSelectorButtons.forEach((button) => {
 chrome.runtime.onMessage.addListener((message) => {
   if (message?.type === "SELECTOR_PICKED") {
     const { selectorKey, selector } = message.payload || {};
-    if (!selectorKey) return;
+    const definition = selectorDefinitions[selectorKey];
+    if (!selectorKey || !definition) return;
     selectorConfig = { ...selectorConfig, [selectorKey]: selector };
     renderSelectorConfig();
     persistState().catch(() => {});
-    setStatus(`${selectorLabels[selectorKey] || selectorKey} saved: ${selector}`);
+    setStatus(`${definition.label} saved from picker: ${selector}`);
   }
 
   if (message?.type === "SELECTOR_PICK_CANCELLED") {
-    const { selectorKey } = message.payload || {};
-    setStatus(`${selectorLabels[selectorKey] || selectorKey} picker cancelled.`);
+    const definition = selectorDefinitions[message.payload?.selectorKey];
+    setStatus(`${definition?.label || message.payload?.selectorKey || "Selector"} picker cancelled.`);
   }
 });
 

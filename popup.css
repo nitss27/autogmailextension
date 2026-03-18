@@ -1,6 +1,6 @@
 body {
   font-family: Arial, sans-serif;
-  width: 900px;
+  width: 920px;
   margin: 0;
   padding: 12px;
 }
@@ -47,9 +47,11 @@ textarea {
   border-radius: 6px;
 }
 
-.actions {
+.actions,
+.selector-actions {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 button {
@@ -107,9 +109,15 @@ button {
   color: #5c6b7a;
 }
 
+.selector-input {
+  min-height: 72px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+}
+
 .selector-value {
   display: block;
-  margin-top: 8px;
   padding: 6px;
   border-radius: 6px;
   background: #f3f6fb;
@@ -118,10 +126,6 @@ button {
   line-height: 1.4;
   white-space: pre-wrap;
   word-break: break-word;
-}
-
-.pick-selector-btn {
-  align-self: flex-start;
 }
 
 .selector-help {
