@@ -32,11 +32,24 @@ function getJobCards() {
   );
 }
 
-function getCardKey(card, index) {
-  const jobId =
+function getCardJobId(card) {
+  return (
     card?.getAttribute("data-job-id") ||
     card?.closest("[data-job-id]")?.getAttribute("data-job-id") ||
     card?.closest("li[data-occludable-job-id]")?.getAttribute("data-occludable-job-id") ||
+    card?.getAttribute("componentkey")?.match(/(\d{6,})$/)?.[1] ||
+    card?.querySelector('[componentkey^="job-card-component-ref-"]')?.getAttribute("componentkey")?.match(/(\d{6,})$/)?.[1] ||
+    ""
+  );
+}
+
+function buildJobUrlFromId(jobId) {
+  return jobId ? `https://www.linkedin.com/jobs/view/${jobId}/` : "";
+}
+
+function getCardKey(card, index) {
+  const jobId =
+    getCardJobId(card) ||
     card?.querySelector('[componentkey^="job-card-component-ref-"]')?.getAttribute("componentkey") ||
     "";
 
@@ -245,9 +258,11 @@ function extractJobDetails(card) {
     textOf(card.querySelector("p span.d5843e4c")) ||
     textOf(card.querySelector("p._270d69ec"));
 
+  const jobId = getCardJobId(card);
   const jobUrlRaw =
     pane?.querySelector('a[href*="/jobs/view/"]')?.href ||
     card.querySelector('a[href*="/jobs/view/"]')?.href ||
+    buildJobUrlFromId(jobId) ||
     "";
   const jobUrl = jobUrlRaw ? new URL(jobUrlRaw, window.location.origin).href : "";
 
@@ -287,9 +302,10 @@ async function collectAfterCardClick(card, previousJobTitle = "", rounds = 12) {
 
   for (let i = 0; i < rounds; i += 1) {
     details = extractJobDetails(card);
-    const hasUsefulData = details.companyProfileUrl || details.jobTitle;
+    const hasUsefulData = details.companyProfileUrl || details.jobTitle || details.jobUrl;
     const changedListing = details.jobTitle && details.jobTitle !== previousJobTitle;
-    if (hasUsefulData && (changedListing || !previousJobTitle)) break;
+    const completeEnough = Boolean(details.jobTitle && details.jobUrl);
+    if ((completeEnough || hasUsefulData) && (changedListing || !previousJobTitle)) break;
     await sleep(250);
   }
 
@@ -386,10 +402,16 @@ async function fetchAllCompanyUrlsFromJobList(listingTarget = 25) {
         ? activation.details
         : await collectAfterCardClick(card, previousJobTitle);
       const companyProfileUrl = normalizeLinkedInCompanyUrl(details.companyProfileUrl || "") || "";
+      const jobUrl = details.jobUrl || buildJobUrlFromId(getCardJobId(card));
       if (companyProfileUrl) companyUrls.add(companyProfileUrl);
+
+      if (!details.jobTitle && !jobUrl && !companyProfileUrl) {
+        continue;
+      }
 
       listings.push({
         ...details,
+        jobUrl,
         companyProfileUrl,
         cardKey,
         detailsFingerprint: activation.fingerprint
