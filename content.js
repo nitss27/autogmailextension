@@ -85,20 +85,47 @@ function clickElement(el) {
   );
 }
 
+function findClosestClickableAncestor(node, root) {
+  let current = node;
+  while (current && current !== root && current !== document.body) {
+    if (
+      current.matches?.('[role="button"]') ||
+      current.matches?.('a[href*="/jobs/view/"]') ||
+      current.matches?.('button:not([aria-label*="Dismiss"])') ||
+      current.hasAttribute?.("componentkey")
+    ) {
+      return current;
+    }
+    current = current.parentElement;
+  }
+  return null;
+}
+
 function findCardActivationTarget(card) {
-  return (
-    card.matches?.('[role="button"][componentkey^="job-card-component-ref-"]') ? card : null
-  ) || (
-    card.querySelector('[role="button"][componentkey^="job-card-component-ref-"]')
-  ) || (
-    card.matches?.('[role="button"]') ? card : null
-  ) || (
-    card.querySelector('[role="button"]')
-  ) || (
-    card.querySelector("a.job-card-list__title--link")
-  ) || (
-    card.querySelector("a.job-card-container__link")
-  ) || card;
+  const directCandidates = [
+    card.matches?.('[role="button"][componentkey^="job-card-component-ref-"]') ? card : null,
+    card.querySelector('[role="button"][componentkey^="job-card-component-ref-"]'),
+    card.matches?.('[role="button"]') ? card : null,
+    card.querySelector("a.job-card-list__title--link"),
+    card.querySelector("a.job-card-container__link"),
+    card.querySelector("p span.d5843e4c"),
+    card.querySelector("p._270d69ec span"),
+    card.querySelector("figure"),
+    card.querySelector("img")
+  ].filter(Boolean);
+
+  for (const candidate of directCandidates) {
+    const clickableAncestor = findClosestClickableAncestor(candidate, card.parentElement || card);
+    if (clickableAncestor) return clickableAncestor;
+    if (candidate.matches?.('[role="button"], a[href*="/jobs/view/"]')) return candidate;
+  }
+
+  const genericRoleButton = Array.from(card.querySelectorAll('[role="button"]')).find(
+    (el) => !/dismiss/i.test(el.getAttribute('aria-label') || '')
+  );
+  if (genericRoleButton) return genericRoleButton;
+
+  return card;
 }
 
 function activateCard(card) {
