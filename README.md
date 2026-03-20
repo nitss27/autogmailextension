@@ -16,6 +16,8 @@ For each URL (one-by-one):
 8. Close the tab and move to the next URL.
 
 The popup shows live progress (`Processing X of Y...`) and stores run state/results in extension storage, so reopening the popup still shows output for copying. It exports a copyable TSV table (`Domain | Emails | Error`).
+Copy uses both plain-text TSV and HTML table formats so Excel/Google Sheets paste each value into separate cells more reliably.
+
 
 You can also use the **Exclude emails** box (one rule per line). This list is saved and automatically applied in future runs.
 - `person@example.com` excludes that exact email.

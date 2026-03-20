@@ -24,6 +24,22 @@ function parseExcludeList(raw) {
   )];
 }
 
+function sanitizeCell(value) {
+  return String(value || '')
+    .replace(/\t/g, ' ')
+    .replace(/\r?\n/g, ', ')
+    .trim();
+}
+
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 async function saveSettings() {
   await chrome.storage.local.set({ [SETTINGS_KEY]: excludeInput.value });
 }
@@ -41,10 +57,10 @@ function renderResults(results) {
 
   const rows = results.map((result) => {
     const emails = result.emails?.length ? result.emails.join('<br>') : '<span class="small">No emails found</span>';
-    const errorLine = result.error ? `<div class="small">Error: ${result.error}</div>` : '';
+    const errorLine = result.error ? `<div class="small">Error: ${escapeHtml(result.error)}</div>` : '';
 
     return `<tr>
-      <td>${result.domain}${errorLine}</td>
+      <td>${escapeHtml(result.domain)}${errorLine}</td>
       <td>${emails}</td>
     </tr>`;
   }).join('');
@@ -63,15 +79,42 @@ function renderResults(results) {
 function toClipboardTable(results) {
   const headers = ['Domain', 'Emails', 'Error'];
   const rows = results.map((result) => [
-    result.domain,
-    (result.emails || []).join(', '),
-    result.error || ''
+    sanitizeCell(result.domain),
+    sanitizeCell((result.emails || []).join(', ')),
+    sanitizeCell(result.error || '')
   ]);
+
   return [headers, ...rows].map((row) => row.join('\t')).join('\n');
 }
 
+function toClipboardHtmlTable(results) {
+  const headerHtml = '<tr><th>Domain</th><th>Emails</th><th>Error</th></tr>';
+  const rowHtml = results.map((result) => {
+    const emails = (result.emails || []).map((email) => escapeHtml(email)).join('<br>');
+    return `<tr>
+      <td>${escapeHtml(result.domain)}</td>
+      <td>${emails || ''}</td>
+      <td>${escapeHtml(result.error || '')}</td>
+    </tr>`;
+  }).join('');
+
+  return `<table><thead>${headerHtml}</thead><tbody>${rowHtml}</tbody></table>`;
+}
+
 async function copyResults(results) {
-  await navigator.clipboard.writeText(toClipboardTable(results));
+  const plainText = toClipboardTable(results);
+  const htmlText = toClipboardHtmlTable(results);
+
+  if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
+    const item = new ClipboardItem({
+      'text/plain': new Blob([plainText], { type: 'text/plain' }),
+      'text/html': new Blob([htmlText], { type: 'text/html' })
+    });
+    await navigator.clipboard.write([item]);
+    return;
+  }
+
+  await navigator.clipboard.writeText(plainText);
 }
 
 async function loadLatestState() {
