@@ -21,7 +21,11 @@
       <label for="urlsBox">Company profile URLs</label>
       <textarea id="urlsBox" rows="5" placeholder="https://www.linkedin.com/company/...\n..."></textarea>
 
+      <label for="excludeBox">Exclude job listings from copied output</label>
+      <textarea id="excludeBox" rows="4" placeholder="Paste job URLs or listing IDs here, one per line..."></textarea>
+
       <div class="actions">
+        <button id="addFetchedBtn" type="button">Add Current Fetched</button>
         <button id="copyBtn" type="button">Copy Table (TSV)</button>
         <button id="clearBtn" type="button">Clear</button>
       </div>

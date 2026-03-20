@@ -45,6 +45,7 @@ textarea {
 .actions {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 button {

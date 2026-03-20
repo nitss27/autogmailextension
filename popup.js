@@ -1,9 +1,11 @@
 const fetchBtn = document.getElementById("fetchBtn");
 const processBtn = document.getElementById("processBtn");
+const addFetchedBtn = document.getElementById("addFetchedBtn");
 const copyBtn = document.getElementById("copyBtn");
 const clearBtn = document.getElementById("clearBtn");
 const listingTargetEl = document.getElementById("listingTarget");
 const urlsBox = document.getElementById("urlsBox");
+const excludeBox = document.getElementById("excludeBox");
 const resultsBody = document.getElementById("resultsBody");
 const statusEl = document.getElementById("status");
 
@@ -34,6 +36,26 @@ function parseUrlsFromBox() {
     .split(/\r?\n/)
     .map((v) => v.trim())
     .filter(Boolean);
+}
+
+function parseExcludeSet() {
+  return new Set(
+    excludeBox.value
+      .split(/\r?\n/)
+      .map((v) => v.trim())
+      .filter(Boolean)
+  );
+}
+
+function buildRowExclusionKeys(row) {
+  return [row.jobUrl, row.jobTitle, `${row.jobTitle}||${row.companyDisplayName || row.companyName || ""}`]
+    .map((v) => String(v || "").trim())
+    .filter(Boolean);
+}
+
+function getRowsForCopy() {
+  const excludes = parseExcludeSet();
+  return latestRows.filter((row) => !buildRowExclusionKeys(row).some((key) => excludes.has(key)));
 }
 
 function toCellLink(url) {
@@ -130,7 +152,8 @@ async function persistState() {
     listingTarget: listingTargetEl.value,
     latestCompanyUrls,
     latestRows,
-    urlsBoxValue: urlsBox.value
+    urlsBoxValue: urlsBox.value,
+    excludeBoxValue: excludeBox.value
   });
 }
 
@@ -180,7 +203,13 @@ async function processCompanyProfiles() {
 }
 
 async function restoreState() {
-  const state = await chrome.storage.local.get(["listingTarget", "latestCompanyUrls", "latestRows", "urlsBoxValue"]);
+  const state = await chrome.storage.local.get([
+    "listingTarget",
+    "latestCompanyUrls",
+    "latestRows",
+    "urlsBoxValue",
+    "excludeBoxValue"
+  ]);
   if (state.listingTarget) listingTargetEl.value = state.listingTarget;
   latestCompanyUrls = Array.isArray(state.latestCompanyUrls) ? state.latestCompanyUrls : [];
   latestRows = Array.isArray(state.latestRows) ? state.latestRows : [];
@@ -188,6 +217,9 @@ async function restoreState() {
     urlsBox.value = state.urlsBoxValue;
   } else if (latestCompanyUrls.length) {
     urlsBox.value = latestCompanyUrls.join("\n");
+  }
+  if (typeof state.excludeBoxValue === "string") {
+    excludeBox.value = state.excludeBoxValue;
   }
   renderTable(latestRows);
 }
@@ -217,11 +249,8 @@ fetchBtn.addEventListener("click", async () => {
     }));
     renderTable(latestRows);
 
-    setStatus(`Fetched ${response.listingsProcessed || 0} listings / ${latestCompanyUrls.length} company URLs across ${response.pagesVisited || 1} pages. Starting company processing...`);
+    setStatus(`Fetched ${response.listingsProcessed || 0} listings / ${latestCompanyUrls.length} company URLs across ${response.pagesVisited || 1} pages.`);
     await persistState();
-    if (latestCompanyUrls.length) {
-      await processCompanyProfiles();
-    }
   } catch (error) {
     setStatus(`Fetch failed: ${error.message}`);
   } finally {
@@ -243,11 +272,24 @@ processBtn.addEventListener("click", async () => {
   }
 });
 
+addFetchedBtn.addEventListener("click", async () => {
+  const existing = parseExcludeSet();
+  for (const row of latestRows) {
+    for (const key of buildRowExclusionKeys(row)) {
+      existing.add(key);
+    }
+  }
+  excludeBox.value = Array.from(existing).join("\n");
+  await persistState();
+  setStatus(`Added ${latestRows.length} fetched listings to exclusion list.`);
+});
+
 copyBtn.addEventListener("click", async () => {
   try {
     if (!latestRows.length) throw new Error("No table data to copy.");
-    await navigator.clipboard.writeText(rowsToTsv(latestRows));
-    setStatus("Copied table as TSV.");
+    const rowsForCopy = getRowsForCopy();
+    await navigator.clipboard.writeText(rowsToTsv(rowsForCopy));
+    setStatus(`Copied ${rowsForCopy.length} rows as TSV (${latestRows.length - rowsForCopy.length} excluded).`);
   } catch (error) {
     setStatus(`Copy failed: ${error.message}`);
   }
@@ -257,9 +299,10 @@ clearBtn.addEventListener("click", async () => {
   latestCompanyUrls = [];
   latestRows = [];
   urlsBox.value = "";
+  excludeBox.value = "";
   renderTable([]);
   await chrome.storage.local.clear();
-  setStatus("Cleared links, table, and saved data.");
+  setStatus("Cleared links, table, exclusions, and saved data.");
 });
 
 restoreState().catch(() => {});
