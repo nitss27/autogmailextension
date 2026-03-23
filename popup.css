@@ -1,74 +1,90 @@
 body {
   font-family: Arial, sans-serif;
-  width: 380px;
+  width: 900px;
   margin: 0;
   padding: 12px;
 }
+
 main {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
+
 h1 {
   font-size: 18px;
   margin: 0;
 }
+
 .hint {
   margin: 0;
-  color: #3d5;
+  color: #4f6f52;
   font-size: 12px;
 }
+
 label {
   font-size: 12px;
   font-weight: 600;
 }
+
 input,
 textarea,
-select,
 button {
   font: inherit;
 }
+
 input,
-textarea,
-select {
-  padding: 6px;
-}
-.mode-block {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  border: 1px solid #ddd;
+textarea {
+  width: 100%;
+  box-sizing: border-box;
   padding: 8px;
+  border: 1px solid #ccc;
   border-radius: 6px;
 }
-.hidden {
-  display: none;
-}
+
 .actions {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
 }
+
 button {
   padding: 8px;
   cursor: pointer;
 }
+
+.table-wrap {
+  overflow: auto;
+  max-height: 340px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+th,
+td {
+  border-bottom: 1px solid #eee;
+  padding: 6px;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  position: sticky;
+  top: 0;
+  background: #fafafa;
+}
+
 #status {
   white-space: pre-wrap;
   font-size: 12px;
   background: #f5f5f5;
-  min-height: 40px;
+  min-height: 42px;
   padding: 8px;
-}
-
-.check {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-}
-
-.note {
   margin: 0;
-  font-size: 12px;
-  color: #555;
 }

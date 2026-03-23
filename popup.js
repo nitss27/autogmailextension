@@ -1,440 +1,312 @@
-const modeEl = document.getElementById("mode");
-const singleFields = document.getElementById("singleFields");
-const pasteFields = document.getElementById("pasteFields");
-const sheetFields = document.getElementById("sheetFields");
-const toEl = document.getElementById("to");
-const subjectEl = document.getElementById("subject");
-const bodyEl = document.getElementById("body");
-const rowsEl = document.getElementById("rows");
-const sheetUrlEl = document.getElementById("sheetUrl");
-const sendLimitEl = document.getElementById("sendLimit");
-const enableAttachmentEl = document.getElementById("enableAttachment");
-const sheetAttachRuleEl = document.getElementById("sheetAttachRule");
-const resumeEl = document.getElementById("resumeFile");
-const runBtn = document.getElementById("runBtn");
+const fetchBtn = document.getElementById("fetchBtn");
+const processBtn = document.getElementById("processBtn");
+const addFetchedBtn = document.getElementById("addFetchedBtn");
+const copyBtn = document.getElementById("copyBtn");
 const clearBtn = document.getElementById("clearBtn");
+const listingTargetEl = document.getElementById("listingTarget");
+const urlsBox = document.getElementById("urlsBox");
+const excludeBox = document.getElementById("excludeBox");
+const resultsBody = document.getElementById("resultsBody");
 const statusEl = document.getElementById("status");
 
-const SENT_VALUES = new Set(["yes", "true", "sent", "1", "done"]);
-const ATTACH_VALUES = new Set(["yes", "true", "attach", "1", "y"]);
+let latestCompanyUrls = [];
+let latestRows = [];
 
-function setStatus(msg) {
-  statusEl.textContent = msg;
+function setStatus(message) {
+  statusEl.textContent = message;
 }
 
-function toggleMode() {
-  const mode = modeEl.value;
-  singleFields.classList.toggle("hidden", mode !== "single");
-  pasteFields.classList.toggle("hidden", mode !== "paste");
-  sheetFields.classList.toggle("hidden", mode !== "sheet");
+function escapeHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 }
 
-function toggleAttachmentUi() {
-  const enabled = enableAttachmentEl.checked;
-  resumeEl.disabled = !enabled;
-  sheetAttachRuleEl.disabled = !enabled;
+function getListingTarget() {
+  const parsed = Number.parseInt(listingTargetEl.value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) throw new Error("Enter a valid listing count greater than 0.");
+  return parsed;
 }
 
-function parseCsvMatrix(input) {
-  const rows = [];
-  let row = [];
-  let cell = "";
-  let inQuotes = false;
-
-  for (let i = 0; i < input.length; i += 1) {
-    const ch = input[i];
-
-    if (ch === '"') {
-      if (inQuotes && input[i + 1] === '"') {
-        cell += '"';
-        i += 1;
-      } else {
-        inQuotes = !inQuotes;
-      }
-      continue;
-    }
-
-    if (ch === "," && !inQuotes) {
-      row.push(cell);
-      cell = "";
-      continue;
-    }
-
-    if ((ch === "\n" || ch === "\r") && !inQuotes) {
-      if (ch === "\r" && input[i + 1] === "\n") i += 1;
-      row.push(cell);
-      if (row.some((v) => String(v).trim().length > 0)) rows.push(row);
-      row = [];
-      cell = "";
-      continue;
-    }
-
-    cell += ch;
-  }
-
-  row.push(cell);
-  if (row.some((v) => String(v).trim().length > 0)) rows.push(row);
-  return rows;
+function parseUrlsFromBox() {
+  return urlsBox.value
+    .split(/\r?\n/)
+    .map((v) => v.trim())
+    .filter(Boolean);
 }
 
-function parseDelimitedRows(inputText) {
-  const clean = inputText.replace(/^\uFEFF/, "");
-  if (!clean.trim()) return { delimiter: ",", matrix: [] };
-
-  const firstLine = clean.split(/\r?\n/, 1)[0] || "";
-  const delimiter = firstLine.includes("\t") ? "\t" : ",";
-
-  const matrix =
-    delimiter === "\t"
-      ? clean
-          .split(/\r?\n/)
-          .filter((line) => line.trim().length > 0)
-          .map((line) => line.split("\t"))
-      : parseCsvMatrix(clean);
-
-  return { delimiter, matrix };
+function parseExcludeSet() {
+  return new Set(
+    excludeBox.value
+      .split(/\r?\n/)
+      .map((v) => v.trim())
+      .filter(Boolean)
+  );
 }
 
-function columnLetterFromIndex(idx) {
-  if (idx < 0) return null;
-  let n = idx + 1;
-  let out = "";
-  while (n > 0) {
-    const rem = (n - 1) % 26;
-    out = String.fromCharCode(65 + rem) + out;
-    n = Math.floor((n - 1) / 26);
-  }
-  return out;
+function buildRowExclusionKeys(row) {
+  return [row.jobUrl, row.jobTitle, `${row.jobTitle}||${row.companyDisplayName || row.companyName || ""}`]
+    .map((v) => String(v || "").trim())
+    .filter(Boolean);
 }
 
-function parseRowsWithMeta(inputText) {
-  const { delimiter, matrix } = parseDelimitedRows(inputText);
-  if (!matrix.length) return { rows: [], meta: null };
-
-  const headers = matrix[0].map((h) => h.trim().toLowerCase());
-  const idx = {
-    to: headers.indexOf("to"),
-    subject: headers.indexOf("subject"),
-    body: headers.indexOf("body"),
-    sent: headers.indexOf("sent"),
-    attach: ["attach", "attachment", "send_attachment", "with_attachment"]
-      .map((h) => headers.indexOf(h))
-      .find((v) => v >= 0) ?? -1
-  };
-
-  if (idx.to < 0 || idx.subject < 0 || idx.body < 0) {
-    throw new Error("Headers must include to, subject, body");
-  }
-
-  const rows = matrix
-    .slice(1)
-    .map((cols, i) => {
-      const sentVal = idx.sent >= 0 ? String(cols[idx.sent] || "").trim().toLowerCase() : "";
-      const attachVal = idx.attach >= 0 ? String(cols[idx.attach] || "").trim().toLowerCase() : "";
-      return {
-        rowNumber: i + 2,
-        to: String(cols[idx.to] || "").trim(),
-        subject: String(cols[idx.subject] || "").trim(),
-        body: String(cols[idx.body] || ""),
-        sent: SENT_VALUES.has(sentVal),
-        attachAllowed: ATTACH_VALUES.has(attachVal)
-      };
-    })
-    .filter((r) => r.to && r.subject && String(r.body).trim().length > 0);
-
-  return {
-    rows,
-    meta: {
-      delimiter,
-      sentColumnIndex: idx.sent,
-      sentColumnLetter: columnLetterFromIndex(idx.sent),
-      attachColumnIndex: idx.attach
-    }
-  };
+function getRowsForCopy() {
+  const excludes = parseExcludeSet();
+  return latestRows.filter((row) => !buildRowExclusionKeys(row).some((key) => excludes.has(key)));
 }
 
-function extractSheetId(url) {
-  const match = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
-  return match ? match[1] : null;
+function toCellLink(url) {
+  if (!url) return "";
+  const clean = escapeHtml(url);
+  return `<a href="${clean}" target="_blank">${clean}</a>`;
 }
 
-function extractGid(url) {
-  const match = url.match(/[?&#]gid=(\d+)/);
-  return match ? match[1] : "0";
-}
-
-function buildCsvCandidates(sheetUrl, sheetId, gid) {
-  const urls = new Set();
-  urls.add(`https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`);
-  urls.add(`https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv&gid=${gid}`);
-
-  const cleaned = sheetUrl.trim();
-  if (cleaned.includes("output=csv")) {
-    urls.add(cleaned);
-  } else if (cleaned.includes("/pub?")) {
-    urls.add(cleaned.replace("/pub?", "/pub?output=csv&"));
-  }
-
-  return Array.from(urls);
-}
-
-async function fetchSheetRows(sheetUrl) {
-  const sheetId = extractSheetId(sheetUrl);
-  if (!sheetId) throw new Error("Invalid Google Sheet URL");
-  const gid = extractGid(sheetUrl);
-  const csvCandidates = buildCsvCandidates(sheetUrl, sheetId, gid);
-
-  let text = null;
-  const attempts = [];
-  for (const csvUrl of csvCandidates) {
-    try {
-      const resp = await fetch(csvUrl, { credentials: "include" });
-      const body = await resp.text();
-      if (!resp.ok) {
-        attempts.push(`${resp.status} @ ${csvUrl}`);
-        continue;
-      }
-      if (body.includes("<!DOCTYPE html") || body.includes("<html")) {
-        attempts.push(`non-CSV response @ ${csvUrl}`);
-        continue;
-      }
-      text = body;
-      break;
-    } catch (err) {
-      attempts.push(`${err.message} @ ${csvUrl}`);
-    }
-  }
-
-  if (!text) {
-    throw new Error(
-      `Failed to fetch sheet CSV. Make sure the sheet is shared/published and try a URL with gid. Details: ${attempts.slice(
-        0,
-        2
-      ).join(" | ")}`
-    );
-  }
-
-  const parsed = parseRowsWithMeta(text);
-  return { ...parsed, sheetId, gid };
-}
-
-async function getStorage(keys) {
-  return chrome.storage.local.get(keys);
-}
-
-async function setStorage(data) {
-  return chrome.storage.local.set(data);
-}
-
-async function fileToDataUrl(file) {
-  if (!file) return null;
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = () => reject(new Error("Failed reading attachment"));
-    reader.readAsDataURL(file);
-  });
-}
-
-async function getActiveGmailTab() {
-  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-  const tab = tabs[0];
-  if (!tab || !tab.id || !tab.url || !tab.url.startsWith("https://mail.google.com/")) {
-    throw new Error("Open Gmail in the active tab before sending");
-  }
-  return tab;
-}
-
-async function writeYesToSheetSentColumn(sheetSource, sentRows) {
-  if (!sheetSource?.sheetId || !sheetSource?.gid || !sheetSource?.sentColumnLetter || !sentRows.length) {
-    return { updated: 0, warning: null };
-  }
-
-  const updateWarnings = [];
-  let updated = 0;
-
-  for (const row of sentRows) {
-    if (!row.rowNumber) continue;
-    const cell = `${sheetSource.sentColumnLetter}${row.rowNumber}`;
-    const tq = encodeURIComponent(`update ${cell} set '${"YES"}'`);
-    const url = `https://docs.google.com/spreadsheets/d/${sheetSource.sheetId}/gviz/tq?gid=${sheetSource.gid}&tq=${tq}`;
-
-    try {
-      const resp = await fetch(url, { method: "GET", credentials: "include" });
-      const text = await resp.text();
-      if (resp.ok && !/error/i.test(text)) {
-        updated += 1;
-      } else {
-        updateWarnings.push(`Row ${row.rowNumber}`);
-      }
-    } catch (_) {
-      updateWarnings.push(`Row ${row.rowNumber}`);
-    }
-  }
-
-  if (!updated) {
-    return {
-      updated,
-      warning: "Could not write YES back to sheet sent column via gviz endpoint."
-    };
-  }
-
-  return {
-    updated,
-    warning: updateWarnings.length ? `Some sent marks failed for rows: ${updateWarnings.join(", ")}.` : null
-  };
-}
-
-async function run() {
-  setStatus("Preparing data...");
-  const mode = modeEl.value;
-  const sendLimit = Number(sendLimitEl.value) || null;
-  const enableAttachment = enableAttachmentEl.checked;
-  const sheetAttachRule = sheetAttachRuleEl.checked;
-
-  await setStorage({
-    savedSheetUrl: sheetUrlEl.value.trim(),
-    savedSendLimit: sendLimitEl.value.trim(),
-    savedMode: mode,
-    savedEnableAttachment: enableAttachment,
-    savedSheetAttachRule: sheetAttachRule
-  });
-
-  let rows = [];
-  const sheetUrl = sheetUrlEl.value.trim();
-  let sourceInfo = null;
-
-  if (mode === "single") {
-    rows = [
-      {
-        rowNumber: 1,
-        to: toEl.value.trim(),
-        subject: subjectEl.value.trim(),
-        body: bodyEl.value,
-        sent: false,
-        shouldAttach: enableAttachment
-      }
-    ];
-  } else if (mode === "paste") {
-    const parsed = parseRowsWithMeta(rowsEl.value);
-    rows = parsed.rows.map((row) => ({
-      ...row,
-      shouldAttach: enableAttachment && (!sheetAttachRule || row.attachAllowed)
-    }));
-  } else {
-    if (!sheetUrl) throw new Error("Sheet URL is required");
-    const sheetData = await fetchSheetRows(sheetUrl);
-    rows = sheetData.rows.map((row) => ({
-      ...row,
-      shouldAttach: enableAttachment && (!sheetAttachRule || row.attachAllowed)
-    }));
-    sourceInfo = {
-      type: "sheet",
-      sheetId: sheetData.sheetId,
-      gid: sheetData.gid,
-      sentColumnLetter: sheetData.meta?.sentColumnLetter,
-      hasAttachColumn: sheetData.meta?.attachColumnIndex >= 0
-    };
-  }
-
-  if (!rows.length) throw new Error("No rows found to send");
-
-  let pending = rows.filter((row) => !row.sent);
-  if (sendLimit) pending = pending.slice(0, sendLimit);
-
-  if (!pending.length) {
-    throw new Error(`Nothing to send (all ${rows.length} rows already marked sent in sheet/data).`);
-  }
-
-  const needsAttachment = pending.some((row) => row.shouldAttach);
-  let attachmentPayload = null;
-
-  if (needsAttachment) {
-    const attachment = resumeEl.files[0];
-    if (!attachment) throw new Error("Attachment is enabled and required by row rules, but no file selected");
-    attachmentPayload = {
-      name: attachment.name,
-      type: attachment.type || "application/octet-stream",
-      dataUrl: await fileToDataUrl(attachment)
-    };
-  }
-
-  const tab = await getActiveGmailTab();
-  const attachInfo = enableAttachment
-    ? sourceInfo && sheetAttachRule
-      ? sourceInfo.hasAttachColumn
-        ? "sheet attach rule enabled"
-        : "sheet attach rule enabled but no attach column found (no rows will attach)"
-      : "attachment enabled"
-    : "attachment disabled";
-  setStatus(`Parsed ${rows.length} row(s). Sending ${pending.length} email(s)... (${attachInfo})`);
-
-  const response = await chrome.tabs.sendMessage(tab.id, {
-    type: "RUN_BATCH_SEND",
-    payload: {
-      rows: pending,
-      attachment: attachmentPayload
-    }
-  });
-
-  if (!response || !response.ok) {
-    throw new Error(response?.error || "Send failed");
-  }
-
-  if (sourceInfo) {
-    const writeback = await writeYesToSheetSentColumn(sourceInfo, response.sentRows || []);
-    const base = `Done. Sent ${response.sentCount} email(s).`;
-    const wb = writeback.updated ? ` Sheet writeback YES updated: ${writeback.updated}.` : "";
-    const warn = writeback.warning ? ` Warning: ${writeback.warning}` : "";
-    setStatus(`${base}${wb}${warn}`);
+function renderTable(rows) {
+  if (!rows.length) {
+    resultsBody.innerHTML = "";
     return;
   }
 
-  setStatus(`Done. Sent ${response.sentCount} email(s).`);
+  resultsBody.innerHTML = rows
+    .map((row, index) => {
+      return `<tr>
+        <td>${index + 1}</td>
+        <td>${escapeHtml(row.jobTitle)}</td>
+        <td>${toCellLink(row.jobUrl)}</td>
+        <td>${escapeHtml(row.companyDisplayName || row.companyName)}</td>
+        <td>${toCellLink(row.companyProfileUrl || row.companyLinkedInUrl)}</td>
+        <td>${escapeHtml(row.location)}</td>
+        <td>${escapeHtml(row.postedTime)}</td>
+        <td>${escapeHtml(row.applicants)}</td>
+        <td>${escapeHtml(row.workType)}</td>
+        <td>${escapeHtml(row.employmentType)}</td>
+        <td>${escapeHtml(row.easyApply)}</td>
+        <td>${escapeHtml(row.website)}</td>
+        <td>${escapeHtml(row.industry)}</td>
+        <td>${escapeHtml(row.companySize)}</td>
+        <td>${escapeHtml(row.headquarters)}</td>
+        <td>${escapeHtml(row.specialties)}</td>
+        <td>${escapeHtml(row.status)}</td>
+      </tr>`;
+    })
+    .join("");
 }
 
-modeEl.addEventListener("change", toggleMode);
-enableAttachmentEl.addEventListener("change", toggleAttachmentUi);
+function rowsToTsv(rows) {
+  const headers = [
+    "Job Title",
+    "Job URL",
+    "Company (listing)",
+    "Company Profile URL",
+    "Location/Meta",
+    "Posted",
+    "Applicants",
+    "Work Type",
+    "Employment Type",
+    "Easy Apply",
+    "Website",
+    "Industry",
+    "Company Size",
+    "Headquarters",
+    "Specialties",
+    "Status"
+  ];
 
-clearBtn.addEventListener("click", async () => {
-  await setStorage({
-    savedSheetUrl: "",
-    savedSendLimit: "",
-    savedMode: "single",
-    savedEnableAttachment: true,
-    savedSheetAttachRule: true
+  const lines = rows.map((row) =>
+    [
+      row.jobTitle,
+      row.jobUrl,
+      row.companyDisplayName || row.companyName,
+      row.companyProfileUrl || row.companyLinkedInUrl,
+      row.location,
+      row.postedTime,
+      row.applicants,
+      row.workType,
+      row.employmentType,
+      row.easyApply,
+      row.website,
+      row.industry,
+      row.companySize,
+      row.headquarters,
+      row.specialties,
+      row.status
+    ]
+      .map((v) => String(v || "").replace(/\t/g, " ").replace(/\r?\n/g, " "))
+      .join("\t")
+  );
+
+  return [headers.join("\t"), ...lines].join("\n");
+}
+
+async function getActiveTabId() {
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tabs[0]?.id) throw new Error("No active tab found.");
+  return tabs[0].id;
+}
+
+async function persistState() {
+  await chrome.storage.local.set({
+    listingTarget: listingTargetEl.value,
+    latestCompanyUrls,
+    latestRows,
+    urlsBoxValue: urlsBox.value,
+    excludeBoxValue: excludeBox.value
   });
-  sheetUrlEl.value = "";
-  sendLimitEl.value = "";
-  modeEl.value = "single";
-  enableAttachmentEl.checked = true;
-  sheetAttachRuleEl.checked = true;
-  toggleMode();
-  toggleAttachmentUi();
-  setStatus("Saved settings cleared.");
-});
+}
 
-runBtn.addEventListener("click", async () => {
+async function processCompanyProfiles() {
+  const inputUrls = parseUrlsFromBox();
+  latestCompanyUrls = inputUrls.length ? inputUrls : latestCompanyUrls;
+  if (!latestCompanyUrls.length) throw new Error("No company URLs found. Run Fetch Listings first.");
+
+  setStatus(`Processing ${latestCompanyUrls.length} company profiles...`);
+  const response = await chrome.runtime.sendMessage({
+    type: "PROCESS_COMPANY_URLS",
+    payload: { companyUrls: latestCompanyUrls }
+  });
+
+  if (!response?.ok) throw new Error(response?.error || "Failed to process company profiles");
+
+  const companyMap = new Map();
+  for (const p of response.companyProfiles || []) {
+    const key = (p.companyLinkedInUrl || "").replace(/\/+$/, "");
+    if (key) companyMap.set(key, p);
+  }
+
+  latestRows = latestRows.map((row) => {
+    const key = (row.companyProfileUrl || row.companyLinkedInUrl || "").replace(/\/+$/, "");
+    const company = companyMap.get(key);
+    return {
+      ...row,
+      companyName: company?.companyName || row.companyName || "",
+      companyLinkedInUrl: company?.companyLinkedInUrl || row.companyProfileUrl || row.companyLinkedInUrl || "",
+      website: company?.website || "",
+      industry: company?.industry || "",
+      companySize: company?.companySize || "",
+      headquarters: company?.headquarters || "",
+      specialties: company?.specialties || "",
+      verifiedPageDate: company?.verifiedPageDate || "",
+      status: company?.status || "fetched"
+    };
+  });
+
+  if (!latestRows.length) {
+    latestRows = (response.companyProfiles || []).map((p) => ({ ...p, status: p.status || "ok" }));
+  }
+
+  renderTable(latestRows);
+  setStatus(`Done. Processed ${response.processedCount} company profiles.`);
+  await persistState();
+}
+
+async function restoreState() {
+  const state = await chrome.storage.local.get([
+    "listingTarget",
+    "latestCompanyUrls",
+    "latestRows",
+    "urlsBoxValue",
+    "excludeBoxValue"
+  ]);
+  if (state.listingTarget) listingTargetEl.value = state.listingTarget;
+  latestCompanyUrls = Array.isArray(state.latestCompanyUrls) ? state.latestCompanyUrls : [];
+  latestRows = Array.isArray(state.latestRows) ? state.latestRows : [];
+  if (typeof state.urlsBoxValue === "string") {
+    urlsBox.value = state.urlsBoxValue;
+  } else if (latestCompanyUrls.length) {
+    urlsBox.value = latestCompanyUrls.join("\n");
+  }
+  if (typeof state.excludeBoxValue === "string") {
+    excludeBox.value = state.excludeBoxValue;
+  }
+  renderTable(latestRows);
+}
+
+fetchBtn.addEventListener("click", async () => {
   try {
-    await run();
-  } catch (err) {
-    setStatus(`Error: ${err.message}`);
+    fetchBtn.disabled = true;
+    processBtn.disabled = true;
+
+    const listingTarget = getListingTarget();
+    setStatus(`Fetching ${listingTarget} listings across pages...`);
+
+    const tabId = await getActiveTabId();
+    const response = await chrome.tabs.sendMessage(tabId, {
+      type: "FETCH_ALL_COMPANY_URLS",
+      payload: { listingTarget }
+    });
+
+    if (!response?.ok) throw new Error(response?.error || "Failed to fetch listings");
+
+    latestCompanyUrls = response.companyUrls || [];
+    urlsBox.value = latestCompanyUrls.join("\n");
+
+    latestRows = (response.listings || []).map((listing) => ({
+      ...listing,
+      status: listing.status || "fetched"
+    }));
+    renderTable(latestRows);
+
+    setStatus(
+      `Fetched ${response.listingsProcessed || 0} listings / ${latestCompanyUrls.length} company URLs across ${
+        response.pagesVisited || 1
+      } pages${response.skippedCount ? ` (${response.skippedCount} skipped with reasons in Status)` : ""}.`
+    );
+    await persistState();
+  } catch (error) {
+    setStatus(`Fetch failed: ${error.message}`);
+  } finally {
+    fetchBtn.disabled = false;
+    processBtn.disabled = false;
   }
 });
 
-(async function init() {
-  const data = await getStorage([
-    "savedSheetUrl",
-    "savedSendLimit",
-    "savedMode",
-    "savedEnableAttachment",
-    "savedSheetAttachRule"
-  ]);
-  if (data.savedSheetUrl) sheetUrlEl.value = data.savedSheetUrl;
-  if (data.savedSendLimit) sendLimitEl.value = data.savedSendLimit;
-  if (data.savedMode) modeEl.value = data.savedMode;
-  if (typeof data.savedEnableAttachment === "boolean") enableAttachmentEl.checked = data.savedEnableAttachment;
-  if (typeof data.savedSheetAttachRule === "boolean") sheetAttachRuleEl.checked = data.savedSheetAttachRule;
-  toggleMode();
-  toggleAttachmentUi();
-})();
+processBtn.addEventListener("click", async () => {
+  try {
+    fetchBtn.disabled = true;
+    processBtn.disabled = true;
+    await processCompanyProfiles();
+  } catch (error) {
+    setStatus(`Process failed: ${error.message}`);
+  } finally {
+    fetchBtn.disabled = false;
+    processBtn.disabled = false;
+  }
+});
+
+addFetchedBtn.addEventListener("click", async () => {
+  const existing = parseExcludeSet();
+  for (const row of latestRows) {
+    for (const key of buildRowExclusionKeys(row)) {
+      existing.add(key);
+    }
+  }
+  excludeBox.value = Array.from(existing).join("\n");
+  await persistState();
+  setStatus(`Added ${latestRows.length} fetched listings to exclusion list.`);
+});
+
+copyBtn.addEventListener("click", async () => {
+  try {
+    if (!latestRows.length) throw new Error("No table data to copy.");
+    const rowsForCopy = getRowsForCopy();
+    await navigator.clipboard.writeText(rowsToTsv(rowsForCopy));
+    setStatus(`Copied ${rowsForCopy.length} rows as TSV (${latestRows.length - rowsForCopy.length} excluded).`);
+  } catch (error) {
+    setStatus(`Copy failed: ${error.message}`);
+  }
+});
+
+clearBtn.addEventListener("click", async () => {
+  latestCompanyUrls = [];
+  latestRows = [];
+  urlsBox.value = "";
+  excludeBox.value = "";
+  renderTable([]);
+  await chrome.storage.local.clear();
+  setStatus("Cleared links, table, exclusions, and saved data.");
+});
+
+restoreState().catch(() => {});
