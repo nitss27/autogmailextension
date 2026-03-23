@@ -245,11 +245,15 @@ fetchBtn.addEventListener("click", async () => {
 
     latestRows = (response.listings || []).map((listing) => ({
       ...listing,
-      status: "fetched"
+      status: listing.status || "fetched"
     }));
     renderTable(latestRows);
 
-    setStatus(`Fetched ${response.listingsProcessed || 0} listings / ${latestCompanyUrls.length} company URLs across ${response.pagesVisited || 1} pages.`);
+    setStatus(
+      `Fetched ${response.listingsProcessed || 0} listings / ${latestCompanyUrls.length} company URLs across ${
+        response.pagesVisited || 1
+      } pages${response.skippedCount ? ` (${response.skippedCount} skipped with reasons in Status)` : ""}.`
+    );
     await persistState();
   } catch (error) {
     setStatus(`Fetch failed: ${error.message}`);

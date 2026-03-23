@@ -47,6 +47,24 @@ function buildJobUrlFromId(jobId) {
   return jobId ? `https://www.linkedin.com/jobs/view/${jobId}/` : "";
 }
 
+function normalizeJobUrl(rawUrl) {
+  if (!rawUrl) return "";
+
+  try {
+    const url = new URL(rawUrl, window.location.origin);
+    const match = url.pathname.match(/\/jobs\/view\/(\d+)/);
+    if (match?.[1]) return buildJobUrlFromId(match[1]);
+    return url.href;
+  } catch {
+    return "";
+  }
+}
+
+function getJobIdFromUrl(rawUrl) {
+  const normalized = normalizeJobUrl(rawUrl);
+  return normalized.match(/\/jobs\/view\/(\d+)\//)?.[1] || "";
+}
+
 function getCardKey(card, index) {
   const jobId =
     getCardJobId(card) ||
@@ -248,12 +266,34 @@ function extractCardLocalDetails(card) {
   };
 }
 
+function getJobDetailsPane() {
+  return (
+    document.querySelector(".jobs-search__job-details--container") ||
+    document.querySelector('[data-view-name="job-details"]') ||
+    document.querySelector(".jobs-details") ||
+    document.querySelector("main")
+  );
+}
+
+function textCandidates(root, selector) {
+  return Array.from(root?.querySelectorAll(selector) || [])
+    .map((el) => textOf(el))
+    .filter(Boolean);
+}
+
+function pickFirstMatching(values, pattern) {
+  return values.find((value) => pattern.test(value)) || "";
+}
+
 function extractJobDetails(card) {
-  const pane = document.querySelector('.jobs-search__job-details--container, [data-view-name="job-details"], main');
+  const pane = getJobDetailsPane();
   const local = extractCardLocalDetails(card);
+  const paneTextBits = textCandidates(pane, "span, a, p, li, div").slice(0, 200);
 
   const jobTitle =
     textOf(pane?.querySelector('a[href*="/jobs/view/"]')) ||
+    textOf(pane?.querySelector("h1")) ||
+    textOf(pane?.querySelector('[data-test-job-title], [data-testid=\"job-details-job-title\"]')) ||
     textOf(card.querySelector('a.job-card-list__title--link, a[href*="/jobs/view/"]')) ||
     textOf(card.querySelector("p span.d5843e4c")) ||
     textOf(card.querySelector("p._270d69ec"));
@@ -264,7 +304,7 @@ function extractJobDetails(card) {
     card.querySelector('a[href*="/jobs/view/"]')?.href ||
     buildJobUrlFromId(jobId) ||
     "";
-  const jobUrl = jobUrlRaw ? new URL(jobUrlRaw, window.location.origin).href : "";
+  const jobUrl = normalizeJobUrl(jobUrlRaw);
 
   const companyAnchor =
     pane?.querySelector('a[href*="/company/"]') ||
@@ -274,14 +314,24 @@ function extractJobDetails(card) {
   const companyDisplayName = textOf(companyAnchor) || textOf(card.querySelector('p a[href*="/company/"]')) || local.companyDisplayName;
 
   const paneMeta = textOf(pane?.querySelector("p.ba8b842d._6ae9bfc9"));
-  const location = local.location || paneMeta || textOf(card.querySelector(".job-card-container__metadata-wrapper"));
+  const paneLocation = pickFirstMatching(
+    paneTextBits,
+    /\b(remote|hybrid|on-site|united states|metropolitan area|, [A-Z]{2}\b|[A-Z][a-z]+,\s?[A-Z]{2})/i
+  );
+  const location = local.location || paneLocation || paneMeta || textOf(card.querySelector(".job-card-container__metadata-wrapper"));
 
-  const paneApplicants = textOf(pane?.querySelector("p.ba8b842d._6ae9bfc9.d051f947"));
-  const chips = Array.from(pane?.querySelectorAll('a[href*="jobs/search-results"], span') || []).map((el) => textOf(el));
-  const paneWorkType = chips.find((v) => /on-site|remote|hybrid/i.test(v)) || "";
-  const paneEmploymentType = chips.find((v) => /full-time|part-time|contract|internship|temporary/i.test(v)) || "";
-  const panePostedTime = chips.find((v) => /hour|day|week|month|ago/i.test(v)) || "";
-  const paneEasyApply = chips.some((v) => /easy apply/i.test(v)) || !!pane?.querySelector('[aria-label*="Easy Apply"]');
+  const paneApplicants = pickFirstMatching(paneTextBits, /applicant|reviewing applicants|early applicant/i);
+  const paneWorkType = pickFirstMatching(paneTextBits, /\b(on-site|remote|hybrid)\b/i);
+  const paneEmploymentType = pickFirstMatching(
+    paneTextBits,
+    /\b(full-time|part-time|contract|internship|temporary|seasonal|volunteer)\b/i
+  );
+  const panePostedTime = pickFirstMatching(
+    paneTextBits,
+    /posted on|reposted|minutes? ago|hours? ago|days? ago|weeks? ago|months? ago/i
+  );
+  const paneEasyApply =
+    paneTextBits.some((v) => /easy apply/i.test(v)) || !!pane?.querySelector('[aria-label*="Easy Apply"]');
 
   return {
     jobTitle,
@@ -297,19 +347,83 @@ function extractJobDetails(card) {
   };
 }
 
-async function collectAfterCardClick(card, previousJobTitle = "", rounds = 12) {
-  let details = null;
+function validateListingDetails(details) {
+  const missing = [];
+  if (!details.jobTitle) missing.push("job title");
+  if (!details.jobUrl) missing.push("job url");
+  if (!details.companyDisplayName) missing.push("company name");
+  if (!details.companyProfileUrl) missing.push("company profile url");
+  if (!details.location) missing.push("location");
+  if (!details.postedTime) missing.push("posted time");
+  return missing;
+}
 
-  for (let i = 0; i < rounds; i += 1) {
-    details = extractJobDetails(card);
-    const hasUsefulData = details.companyProfileUrl || details.jobTitle || details.jobUrl;
-    const changedListing = details.jobTitle && details.jobTitle !== previousJobTitle;
-    const completeEnough = Boolean(details.jobTitle && details.jobUrl);
-    if ((completeEnough || hasUsefulData) && (changedListing || !previousJobTitle)) break;
-    await sleep(250);
+function matchesExpectedListing(details, expectedJobId, expectedTitle) {
+  const detailJobId = getJobIdFromUrl(details.jobUrl);
+  if (expectedJobId && detailJobId) return detailJobId === expectedJobId;
+  if (expectedTitle && details.jobTitle) return details.jobTitle === expectedTitle;
+  return Boolean(detailJobId || details.jobTitle);
+}
+
+async function collectListingDetails(card, expectedJobId, expectedTitle, attempts = 16) {
+  let lastDetails = extractJobDetails(card);
+
+  for (let i = 0; i < attempts; i += 1) {
+    await sleep(300);
+    lastDetails = extractJobDetails(card);
+    const matches = matchesExpectedListing(lastDetails, expectedJobId, expectedTitle);
+    const missing = validateListingDetails(lastDetails);
+    if (matches && !missing.length) {
+      return {
+        details: lastDetails,
+        missing,
+        matched: true
+      };
+    }
   }
 
-  return details || extractJobDetails(card);
+  const finalMissing = validateListingDetails(lastDetails);
+  return {
+    details: lastDetails,
+    missing: finalMissing,
+    matched: matchesExpectedListing(lastDetails, expectedJobId, expectedTitle)
+  };
+}
+
+async function resolveListingDetails(card) {
+  const expectedJobId = getCardJobId(card);
+  const expectedTitle =
+    textOf(card.querySelector('a.job-card-list__title--link, a[href*="/jobs/view/"]')) ||
+    textOf(card.querySelector("p span.d5843e4c")) ||
+    "";
+
+  let lastResult = {
+    details: extractJobDetails(card),
+    missing: [],
+    matched: false
+  };
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    activateCard(card);
+    lastResult = await collectListingDetails(card, expectedJobId, expectedTitle);
+    if (lastResult.matched && !lastResult.missing.length) {
+      return {
+        ...lastResult,
+        success: true,
+        reason: ""
+      };
+    }
+  }
+
+  const reasons = [];
+  if (!lastResult.matched) reasons.push("detail pane did not switch to the selected listing");
+  if (lastResult.missing.length) reasons.push(`missing ${lastResult.missing.join(", ")}`);
+
+  return {
+    ...lastResult,
+    success: false,
+    reason: reasons.join("; ") || "unknown extraction failure"
+  };
 }
 
 async function scrollJobListToEnd() {
@@ -378,49 +492,53 @@ async function fetchAllCompanyUrlsFromJobList(listingTarget = 25) {
   const seenCardKeys = new Set();
   let pagesVisited = 0;
   const maxPages = 50;
+  let fetchedCount = 0;
+  let skippedCount = 0;
 
-  while (listings.length < listingTarget && pagesVisited < maxPages) {
+  while (fetchedCount < listingTarget && pagesVisited < maxPages) {
     pagesVisited += 1;
     await scrollJobListToEnd();
 
     const cards = getJobCards();
     for (let i = 0; i < cards.length; i += 1) {
-      if (listings.length >= listingTarget) break;
+      if (fetchedCount >= listingTarget) break;
 
       const card = cards[i];
       const cardKey = getCardKey(card, i);
       if (seenCardKeys.has(cardKey)) continue;
 
-      const previousFingerprint = listings[listings.length - 1]?.detailsFingerprint || "";
-      const activation = await activateCardAndWait(card, previousFingerprint);
-      if (!activation.clicked) {
-        continue;
-      }
-
-      const previousJobTitle = listings[listings.length - 1]?.jobTitle || "";
-      const details = activation.details?.jobTitle || activation.details?.companyProfileUrl
-        ? activation.details
-        : await collectAfterCardClick(card, previousJobTitle);
+      const result = await resolveListingDetails(card);
+      const details = result.details || extractJobDetails(card);
       const companyProfileUrl = normalizeLinkedInCompanyUrl(details.companyProfileUrl || "") || "";
-      const jobUrl = details.jobUrl || buildJobUrlFromId(getCardJobId(card));
-      if (companyProfileUrl) companyUrls.add(companyProfileUrl);
+      const jobUrl = normalizeJobUrl(details.jobUrl || buildJobUrlFromId(getCardJobId(card)));
 
-      if (!details.jobTitle && !jobUrl && !companyProfileUrl) {
+      seenCardKeys.add(cardKey);
+
+      if (!result.success) {
+        skippedCount += 1;
+        listings.push({
+          ...details,
+          jobUrl,
+          companyProfileUrl,
+          cardKey,
+          status: `skipped: ${result.reason}`
+        });
         continue;
       }
 
+      if (companyProfileUrl) companyUrls.add(companyProfileUrl);
+      fetchedCount += 1;
       listings.push({
         ...details,
         jobUrl,
         companyProfileUrl,
         cardKey,
-        detailsFingerprint: activation.fingerprint
+        status: "fetched"
       });
-      seenCardKeys.add(cardKey);
+      await sleep(200);
     }
 
-    if (listings.length >= listingTarget) break;
-
+    if (fetchedCount >= listingTarget) break;
     const movedToNextPage = await clickNextPageIfAvailable();
     if (!movedToNextPage) break;
 
@@ -430,7 +548,8 @@ async function fetchAllCompanyUrlsFromJobList(listingTarget = 25) {
   return {
     companyUrls: Array.from(companyUrls),
     listings,
-    listingsProcessed: listings.length,
+    listingsProcessed: fetchedCount,
+    skippedCount,
     pagesVisited
   };
 }
