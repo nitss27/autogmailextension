@@ -35,6 +35,23 @@ function extractEmailsFromText(text) {
   return unique((text.match(EMAIL_REGEX) || []).map((email) => email.toLowerCase()));
 }
 
+function decodeCloudflareEmail(hexString) {
+  const value = String(hexString || '').trim();
+  if (!value || value.length < 4 || value.length % 2 !== 0) return '';
+
+  try {
+    const key = parseInt(value.slice(0, 2), 16);
+    let decoded = '';
+    for (let i = 2; i < value.length; i += 2) {
+      const byte = parseInt(value.slice(i, i + 2), 16);
+      decoded += String.fromCharCode(byte ^ key);
+    }
+    return decoded;
+  } catch {
+    return '';
+  }
+}
+
 function filterExcludedEmails(emails, excludeEmails) {
   if (!excludeEmails?.length) return emails;
 
@@ -168,15 +185,54 @@ async function inspectTab(tabId) {
     func: () => {
       const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
       const html = document.documentElement?.innerHTML || '';
+      const text = document.body?.innerText || '';
+
+      const cloudflareDecode = (hexString) => {
+        const value = String(hexString || '').trim();
+        if (!value || value.length < 4 || value.length % 2 !== 0) return '';
+        try {
+          const key = parseInt(value.slice(0, 2), 16);
+          let decoded = '';
+          for (let i = 2; i < value.length; i += 2) {
+            const byte = parseInt(value.slice(i, i + 2), 16);
+            decoded += String.fromCharCode(byte ^ key);
+          }
+          return decoded;
+        } catch {
+          return '';
+        }
+      };
+
+      const mailtoEmails = [...document.querySelectorAll('a[href^="mailto:"]')]
+        .map((a) => (a.getAttribute('href') || '').replace(/^mailto:/i, '').split('?')[0]);
+
+      const dataAttrEmails = [...document.querySelectorAll('[data-email], [data-mail], [data-contact]')]
+        .flatMap((node) => [
+          node.getAttribute('data-email') || '',
+          node.getAttribute('data-mail') || '',
+          node.getAttribute('data-contact') || ''
+        ]);
+
+      const cloudflareEmails = [...document.querySelectorAll('[data-cfemail]')]
+        .map((el) => cloudflareDecode(el.getAttribute('data-cfemail')));
+
+      const scriptText = [...document.querySelectorAll('script[type="application/ld+json"], script:not([src])')]
+        .map((script) => script.textContent || '')
+        .join('\n');
+
       const emails = [
         ...(html.match(emailRegex) || []),
-        ...[...document.querySelectorAll('a[href^="mailto:"]')]
-          .map((a) => (a.getAttribute('href') || '').replace(/^mailto:/i, '').split('?')[0])
+        ...(text.match(emailRegex) || []),
+        ...(scriptText.match(emailRegex) || []),
+        ...mailtoEmails,
+        ...dataAttrEmails,
+        ...cloudflareEmails
       ];
 
+      const secondaryPattern = /(contact|about|support|team|impressum|legal|company|get[-_]?in[-_]?touch)/i;
       const secondaryLinks = [...document.querySelectorAll('a[href]')]
         .map((a) => a.href)
-        .filter((href) => href && /(contact|about)/i.test(href));
+        .filter((href) => href && secondaryPattern.test(href));
 
       return {
         pageUrl: location.href,
@@ -192,7 +248,11 @@ async function inspectTab(tabId) {
 async function fetchSourceEmails(url) {
   const response = await fetch(url, { method: 'GET', redirect: 'follow', credentials: 'omit' });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  return extractEmailsFromText(await response.text());
+  const source = await response.text();
+  const cloudflareMatches = [...source.matchAll(/data-cfemail=["']([a-fA-F0-9]+)["']/g)]
+    .map((match) => decodeCloudflareEmail(match[1]));
+  const basic = extractEmailsFromText(source);
+  return unique([...basic, ...cloudflareMatches].map((email) => String(email || '').toLowerCase()));
 }
 
 function buildDomain(url) {
