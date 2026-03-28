@@ -18,12 +18,11 @@ For each URL (one-by-one):
 
 ## Controls
 
-- **Start New**: starts a fresh run from the first URL.
-- **Continue Left**: resumes from last paused index.
+- **Start**: resumes the most recent paused run from saved storage; otherwise starts a new run from the current list.
 - **Stop**: immediately pauses processing.
 - **Skip Current**: immediately skips the active website and continues.
 - **Clear List**: clears the website input box.
-- **Copy Table**: copies exactly 2 columns (`Domain`, `Emails`) with emails comma-separated.
+- **Copy Table**: copies exactly 2 columns (`Website`, `Emails`) with emails comma-separated in one cell.
 
 The popup stores state/results in extension storage, so reopening still shows progress/results.
 Live results keep updating while the run is active, and previously collected rows remain visible after popup reopen.
@@ -46,6 +45,6 @@ You can use **Exclude emails** rules (saved automatically):
 2. Paste one URL/domain per line.
 3. (Optional) Fill exclusion rules.
 4. Set **Tab load timeout (ms)** and **Strict skip timeout per website**.
-5. Click **Start New** or **Continue Left**.
+5. Click **Start** (it resumes paused progress if available).
 6. Use **Stop** / **Skip Current** when needed.
 7. Click **Copy Table** after/during completion.

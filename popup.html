@@ -9,7 +9,7 @@
   <body>
     <main>
       <h1>Bulk Email Extractor</h1>
-      <p>Paste one URL/domain per line and run with Start New or Continue Left.</p>
+      <p>Paste one URL/domain per line and click Start. If a run is paused, Start resumes from saved progress.</p>
 
       <label class="fieldLabel" for="websiteInput">Website list</label>
       <textarea id="websiteInput" placeholder="example.com&#10;https://openai.com"></textarea>
@@ -24,9 +24,9 @@
       <input id="strictSkipTimeoutSec" type="number" min="1" max="300" value="10" />
 
       <div class="actions">
-        <button id="startNewBtn">Start New</button>
-        <button id="continueBtn">Continue Left</button>
+        <button id="startBtn">Start</button>
         <button id="stopBtn" disabled>Stop</button>
+        <button id="skipBtn" disabled>Skip Current</button>
         <button id="clearBtn">Clear List</button>
         <button id="copyBtn" disabled>Copy Table</button>
       </div>

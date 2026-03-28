@@ -6,9 +6,9 @@ const input = document.getElementById('websiteInput');
 const excludeInput = document.getElementById('excludeInput');
 const tabLoadTimeoutInput = document.getElementById('tabLoadTimeoutMs');
 const strictSkipTimeoutInput = document.getElementById('strictSkipTimeoutSec');
-const startNewBtn = document.getElementById('startNewBtn');
-const continueBtn = document.getElementById('continueBtn');
+const startBtn = document.getElementById('startBtn');
 const stopBtn = document.getElementById('stopBtn');
+const skipBtn = document.getElementById('skipBtn');
 const clearBtn = document.getElementById('clearBtn');
 const copyBtn = document.getElementById('copyBtn');
 const statusEl = document.getElementById('status');
@@ -16,6 +16,7 @@ const resultsEl = document.getElementById('results');
 
 let latestResults = [];
 let activeRequestId = null;
+let pollingHandle = null;
 
 function setStatus(message, type = '') {
   statusEl.textContent = message;
@@ -66,16 +67,15 @@ function renderResults(results) {
   }
 
   const rows = results.map((result) => {
-    const emails = result.emails?.length ? result.emails.join('<br>') : '<span class="small">No emails found</span>';
-    const errorLine = result.error ? `<div class="small">Error: ${escapeHtml(result.error)}</div>` : '';
-    return `<tr><td>${escapeHtml(result.domain)}${errorLine}</td><td>${emails}</td></tr>`;
+    const emails = result.emails?.length ? escapeHtml(result.emails.join(', ')) : '<span class="small">No emails found</span>';
+    return `<tr><td>${escapeHtml(result.domain)}</td><td>${emails}</td></tr>`;
   }).join('');
 
-  resultsEl.innerHTML = `<table><thead><tr><th>Domain</th><th>Emails</th></tr></thead><tbody>${rows}</tbody></table>`;
+  resultsEl.innerHTML = `<table><thead><tr><th>Website</th><th>Emails</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 function toClipboardTable(results) {
-  const headers = ['Domain', 'Emails'];
+  const headers = ['Website', 'Emails'];
   const rows = results.map((result) => [
     sanitizeCell(result.domain),
     sanitizeCell((result.emails || []).join(', '))
@@ -85,10 +85,10 @@ function toClipboardTable(results) {
 
 function toClipboardHtmlTable(results) {
   const rows = results.map((result) => {
-    const emails = (result.emails || []).map((email) => escapeHtml(email)).join('<br>');
+    const emails = escapeHtml((result.emails || []).join(', '));
     return `<tr><td>${escapeHtml(result.domain)}</td><td>${emails || ''}</td></tr>`;
   }).join('');
-  return `<table><thead><tr><th>Domain</th><th>Emails</th></tr></thead><tbody>${rows}</tbody></table>`;
+  return `<table><thead><tr><th>Website</th><th>Emails</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 async function copyResults(results) {
@@ -108,34 +108,32 @@ async function copyResults(results) {
   await navigator.clipboard.writeText(plainText);
 }
 
-
 function startLiveStatePolling() {
-  let active = true;
+  if (pollingHandle) return;
 
   const tick = async () => {
-    if (!active) return;
     try {
       await loadLatestState();
       const response = await chrome.runtime.sendMessage({ type: 'GET_LATEST_RESULTS' });
       if (response?.ok && response.state?.status !== 'running') {
-        active = false;
+        pollingHandle = null;
         return;
       }
     } catch {
       // ignore polling failures
     }
 
-    setTimeout(tick, 1000);
+    pollingHandle = setTimeout(tick, 400);
   };
 
-  tick();
+  pollingHandle = setTimeout(tick, 0);
 }
 
 function applyStateToUi(state) {
   const isRunning = state?.status === 'running';
-  startNewBtn.disabled = isRunning;
-  continueBtn.disabled = isRunning;
+  startBtn.disabled = isRunning;
   stopBtn.disabled = !isRunning;
+  skipBtn.disabled = !isRunning;
 
   if (Array.isArray(state?.results)) {
     latestResults = state.results;
@@ -144,11 +142,13 @@ function applyStateToUi(state) {
   }
 
   if (state?.status === 'paused') {
-    setStatus(`Paused at ${state.current} of ${state.total}. Click Continue Left to resume.`, 'error');
+    setStatus(`Paused at ${state.current} of ${state.total}. Click Start to resume.`, 'error');
   } else if (state?.status === 'done') {
     setStatus(`Done. Processed ${state.total} website(s).`, 'success');
   } else if (isRunning) {
     setStatus(`Processing ${state.current} of ${state.total}: ${state.domain || '...'}`);
+  } else {
+    setStatus('Ready. Click Start to begin or resume.');
   }
 }
 
@@ -168,7 +168,7 @@ chrome.runtime.onMessage.addListener((message) => {
   setStatus(`Processing ${message.current} of ${message.total}: ${message.domain}${suffix}`);
 });
 
-async function runStart(mode) {
+async function startProcess() {
   const urls = input.value.split('\n').map((value) => value.trim()).filter(Boolean);
   const excludeEmails = parseExcludeList(excludeInput.value);
   const tabLoadTimeoutMs = Math.max(1000, Math.min(120000, Number(tabLoadTimeoutInput.value) || 20000));
@@ -179,16 +179,14 @@ async function runStart(mode) {
   await saveSettings();
   activeRequestId = crypto.randomUUID();
 
-  startNewBtn.disabled = true;
-  continueBtn.disabled = true;
+  startBtn.disabled = true;
   stopBtn.disabled = false;
-  copyBtn.disabled = true;
+  skipBtn.disabled = false;
   startLiveStatePolling();
 
   try {
     const response = await chrome.runtime.sendMessage({
-      type: 'START_OR_RESUME',
-      mode,
+      type: 'START_PROCESS',
       requestId: activeRequestId,
       urls,
       excludeEmails,
@@ -199,15 +197,12 @@ async function runStart(mode) {
     if (!response?.ok) throw new Error('Unexpected extension response.');
     if (response.state) {
       applyStateToUi(response.state);
-      if (response.state.status === 'done' && latestResults.length) {
-        await copyResults(latestResults);
-      }
     }
   } catch (error) {
     setStatus(`Failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
-    startNewBtn.disabled = false;
-    continueBtn.disabled = false;
+    startBtn.disabled = false;
     stopBtn.disabled = true;
+    skipBtn.disabled = true;
   }
 }
 
@@ -216,21 +211,26 @@ async function stopProcess() {
   await loadLatestState();
 }
 
+async function skipCurrent() {
+  await chrome.runtime.sendMessage({ type: 'SKIP_CURRENT' });
+  await loadLatestState();
+}
+
 function clearList() {
   input.value = '';
   setStatus('Website list cleared.');
 }
 
-startNewBtn.addEventListener('click', () => {
-  runStart('new').catch(() => setStatus('Failed to start new run.', 'error'));
-});
-
-continueBtn.addEventListener('click', () => {
-  runStart('continue').catch(() => setStatus('Failed to continue run.', 'error'));
+startBtn.addEventListener('click', () => {
+  startProcess().catch(() => setStatus('Failed to start process.', 'error'));
 });
 
 stopBtn.addEventListener('click', () => {
   stopProcess().catch(() => setStatus('Failed to stop process.', 'error'));
+});
+
+skipBtn.addEventListener('click', () => {
+  skipCurrent().catch(() => setStatus('Failed to skip current website.', 'error'));
 });
 
 clearBtn.addEventListener('click', clearList);

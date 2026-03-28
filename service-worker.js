@@ -8,11 +8,12 @@ let controller = {
   running: false,
   stopRequested: false,
   skipRequested: false,
-  currentTabId: null
+  currentTabId: null,
+  runToken: 0
 };
 
 function normalizeUrl(input) {
-  const raw = input.trim();
+  const raw = String(input || '').trim();
   if (!raw) return null;
 
   try {
@@ -93,7 +94,17 @@ async function getRunState() {
   return data[RUN_STATE_KEY] || null;
 }
 
-function waitForTabComplete(tabId, timeoutMs = TAB_LOAD_TIMEOUT_MS) {
+function isInterrupted(runToken) {
+  return controller.stopRequested || controller.skipRequested || runToken !== controller.runToken;
+}
+
+function interruptReason(runToken) {
+  if (controller.stopRequested || runToken !== controller.runToken) return '__STOP__';
+  if (controller.skipRequested) return '__SKIP__';
+  return '__STOP__';
+}
+
+function waitForTabComplete(tabId, timeoutMs = TAB_LOAD_TIMEOUT_MS, runToken) {
   return new Promise((resolve, reject) => {
     let done = false;
 
@@ -101,33 +112,54 @@ function waitForTabComplete(tabId, timeoutMs = TAB_LOAD_TIMEOUT_MS) {
       if (done) return;
       done = true;
       clearTimeout(timeout);
+      clearInterval(interruptTimer);
       chrome.tabs.onUpdated.removeListener(onUpdated);
+      chrome.tabs.onRemoved.removeListener(onRemoved);
       callback();
     };
 
     const timeout = setTimeout(() => finish(() => reject(new Error('Tab load timeout'))), timeoutMs);
 
+    const interruptTimer = setInterval(() => {
+      if (isInterrupted(runToken)) {
+        finish(() => reject(new Error(interruptReason(runToken))));
+      }
+    }, 60);
+
     const onUpdated = (updatedTabId, changeInfo) => {
       if (updatedTabId === tabId && changeInfo.status === 'complete') finish(resolve);
     };
 
+    const onRemoved = (removedTabId) => {
+      if (removedTabId === tabId) finish(() => reject(new Error(interruptReason(runToken))));
+    };
+
     chrome.tabs.onUpdated.addListener(onUpdated);
+    chrome.tabs.onRemoved.addListener(onRemoved);
 
     chrome.tabs
       .get(tabId)
       .then((tab) => {
+        if (isInterrupted(runToken)) {
+          finish(() => reject(new Error(interruptReason(runToken))));
+          return;
+        }
         if (tab.status === 'complete') finish(resolve);
       })
       .catch(() => finish(() => reject(new Error('Tab unavailable'))));
   });
 }
 
-async function activateAndWait(tabId, tabLoadTimeoutMs = TAB_LOAD_TIMEOUT_MS) {
+async function activateAndWait(tabId, tabLoadTimeoutMs = TAB_LOAD_TIMEOUT_MS, runToken) {
+  if (isInterrupted(runToken)) throw new Error(interruptReason(runToken));
   const tab = await chrome.tabs.get(tabId);
+  if (isInterrupted(runToken)) throw new Error(interruptReason(runToken));
   await chrome.windows.update(tab.windowId, { focused: true });
+  if (isInterrupted(runToken)) throw new Error(interruptReason(runToken));
   await chrome.tabs.update(tabId, { active: true });
-  await waitForTabComplete(tabId, tabLoadTimeoutMs);
+  await waitForTabComplete(tabId, tabLoadTimeoutMs, runToken);
   await sleep(TAB_SETTLE_MS);
+  if (isInterrupted(runToken)) throw new Error(interruptReason(runToken));
 }
 
 async function inspectTab(tabId) {
@@ -171,7 +203,7 @@ function buildDomain(url) {
   }
 }
 
-async function processOneUrl(url, excludeEmails, strictTimeoutMs, tabLoadTimeoutMs) {
+async function processOneUrl(url, excludeEmails, strictTimeoutMs, tabLoadTimeoutMs, runToken) {
   const domain = buildDomain(url);
   let tab = null;
   let timeoutId = null;
@@ -180,23 +212,21 @@ async function processOneUrl(url, excludeEmails, strictTimeoutMs, tabLoadTimeout
     tab = await createTab(url);
     controller.currentTabId = tab.id;
 
-    await activateAndWait(tab.id, tabLoadTimeoutMs);
-    if (controller.stopRequested) throw new Error('__STOP__');
-    if (controller.skipRequested) throw new Error('__SKIP__');
+    await activateAndWait(tab.id, tabLoadTimeoutMs, runToken);
 
     const firstPass = await inspectTab(tab.id);
     const secondaryQueue = unique(firstPass.secondaryLinks).slice(0, MAX_SECONDARY_PAGES);
     const secondaryEmails = [];
 
     for (const link of secondaryQueue) {
-      if (controller.stopRequested) throw new Error('__STOP__');
-      if (controller.skipRequested) throw new Error('__SKIP__');
-
+      if (isInterrupted(runToken)) throw new Error(interruptReason(runToken));
       await chrome.tabs.update(tab.id, { url: link, active: true });
-      await activateAndWait(tab.id, tabLoadTimeoutMs);
+      await activateAndWait(tab.id, tabLoadTimeoutMs, runToken);
       const secondaryPass = await inspectTab(tab.id);
       secondaryEmails.push(...secondaryPass.emails);
     }
+
+    if (isInterrupted(runToken)) throw new Error(interruptReason(runToken));
 
     const sourceEmailsMainPromise = fetchSourceEmails(url).catch(() => []);
     const sourceEmailsSecondaryPromise = Promise.all(
@@ -269,15 +299,26 @@ async function processOneUrl(url, excludeEmails, strictTimeoutMs, tabLoadTimeout
   }
 }
 
+function getCompletedUrlSet(state) {
+  const completed = new Set();
+  for (const item of state.results || []) {
+    if (item?.url) completed.add(item.url);
+  }
+  return completed;
+}
+
 async function runLoop() {
   const state = await getRunState();
   if (!state || !Array.isArray(state.urls)) return state;
 
   controller.running = true;
   controller.stopRequested = false;
+  const runToken = ++controller.runToken;
+
+  const completedUrls = getCompletedUrlSet(state);
 
   while (state.current < state.total) {
-    if (controller.stopRequested) {
+    if (controller.stopRequested || runToken !== controller.runToken) {
       state.status = 'paused';
       await setRunState(state);
       controller.running = false;
@@ -285,6 +326,13 @@ async function runLoop() {
     }
 
     const url = state.urls[state.current];
+
+    if (completedUrls.has(url)) {
+      state.current += 1;
+      await setRunState(state);
+      continue;
+    }
+
     const domain = buildDomain(url);
 
     state.domain = domain;
@@ -303,7 +351,8 @@ async function runLoop() {
       url,
       state.excludeEmails || [],
       Math.max(1000, Number(state.strictSkipTimeoutSec || 10) * 1000),
-      Math.max(1000, Number(state.tabLoadTimeoutMs || TAB_LOAD_TIMEOUT_MS))
+      Math.max(1000, Number(state.tabLoadTimeoutMs || TAB_LOAD_TIMEOUT_MS)),
+      runToken
     );
 
     if (outcome.status === 'stopped') {
@@ -315,6 +364,7 @@ async function runLoop() {
 
     if (outcome.result) {
       state.results.push(outcome.result);
+      completedUrls.add(url);
       state.current += 1;
       await setRunState(state);
     }
@@ -335,6 +385,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (message?.type === 'STOP_PROCESS') {
     controller.stopRequested = true;
+    controller.runToken += 1;
     closeTab(controller.currentTabId).catch(() => {});
     (async () => {
       const state = await getRunState();
@@ -354,28 +405,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return false;
   }
 
-  if (message?.type !== 'START_OR_RESUME') return false;
+  if (message?.type !== 'START_PROCESS') return false;
 
   (async () => {
     let state = await getRunState();
-    const mode = message.mode === 'continue' ? 'continue' : 'new';
+    const incomingUrls = unique((message.urls || []).map(normalizeUrl));
 
-    if (mode === 'new' || !state || state.status === 'done' || state.status === 'idle') {
-      const urls = unique((message.urls || []).map(normalizeUrl));
-      state = {
-        status: 'running',
-        requestId: message.requestId || crypto.randomUUID(),
-        urls,
-        total: urls.length,
-        current: 0,
-        domain: '',
-        results: [],
-        excludeEmails: unique((message.excludeEmails || []).map((email) => String(email).toLowerCase().trim()).filter(Boolean)),
-        tabLoadTimeoutMs: Math.max(1000, Math.min(120000, Number(message.tabLoadTimeoutMs) || 20000)),
-        strictSkipTimeoutSec: Math.max(1, Math.min(300, Number(message.strictSkipTimeoutSec) || 10))
-      };
-      await setRunState(state);
-    } else if (state.status === 'paused') {
+    const canResume = state
+      && Array.isArray(state.urls)
+      && state.status === 'paused'
+      && state.current < state.total;
+
+    if (canResume) {
       state.status = 'running';
       state.requestId = message.requestId || state.requestId;
       if (Number(message.tabLoadTimeoutMs)) {
@@ -384,6 +425,23 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       if (Number(message.strictSkipTimeoutSec)) {
         state.strictSkipTimeoutSec = Math.max(1, Math.min(300, Number(message.strictSkipTimeoutSec)));
       }
+      if (Array.isArray(message.excludeEmails)) {
+        state.excludeEmails = unique((message.excludeEmails || []).map((email) => String(email).toLowerCase().trim()).filter(Boolean));
+      }
+      await setRunState(state);
+    } else {
+      state = {
+        status: 'running',
+        requestId: message.requestId || crypto.randomUUID(),
+        urls: incomingUrls,
+        total: incomingUrls.length,
+        current: 0,
+        domain: '',
+        results: [],
+        excludeEmails: unique((message.excludeEmails || []).map((email) => String(email).toLowerCase().trim()).filter(Boolean)),
+        tabLoadTimeoutMs: Math.max(1000, Math.min(120000, Number(message.tabLoadTimeoutMs) || 20000)),
+        strictSkipTimeoutSec: Math.max(1, Math.min(300, Number(message.strictSkipTimeoutSec) || 10))
+      };
       await setRunState(state);
     }
 
