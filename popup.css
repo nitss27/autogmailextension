@@ -47,7 +47,6 @@ textarea {
 
 .actions {
   display: flex;
-  flex-wrap: wrap;
   gap: 8px;
   margin: 12px 0;
 }
@@ -60,7 +59,7 @@ button {
   cursor: pointer;
 }
 
-#startBtn {
+#processBtn {
   background: #2563eb;
   color: white;
 }
