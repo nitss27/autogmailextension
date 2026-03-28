@@ -1,8 +1,11 @@
 const EMAIL_REGEX = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
-const TAB_LOAD_TIMEOUT_MS = 15000;
-const TAB_SETTLE_MS = 150;
+const DEFAULT_TAB_LOAD_TIMEOUT_MS = 15000;
+const TAB_SETTLE_MS = 50;
 const MAX_SECONDARY_PAGES = 3;
 const RUN_STATE_KEY = 'latestRunState';
+
+let runInProgress = false;
+let stopRequested = false;
 
 function normalizeUrl(input) {
   const raw = input.trim();
@@ -95,7 +98,11 @@ async function getRunState() {
   return data[RUN_STATE_KEY] || null;
 }
 
-function waitForTabComplete(tabId, timeoutMs = TAB_LOAD_TIMEOUT_MS) {
+async function clearRunState() {
+  await chrome.storage.local.remove(RUN_STATE_KEY);
+}
+
+function waitForTabComplete(tabId, timeoutMs = DEFAULT_TAB_LOAD_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
     let done = false;
 
@@ -126,11 +133,11 @@ function waitForTabComplete(tabId, timeoutMs = TAB_LOAD_TIMEOUT_MS) {
   });
 }
 
-async function activateAndWait(tabId) {
+async function activateAndWait(tabId, tabLoadTimeoutMs) {
   const tab = await chrome.tabs.get(tabId);
   await chrome.windows.update(tab.windowId, { focused: true });
   await chrome.tabs.update(tabId, { active: true });
-  await waitForTabComplete(tabId);
+  await waitForTabComplete(tabId, tabLoadTimeoutMs);
   await sleep(TAB_SETTLE_MS);
 }
 
@@ -179,12 +186,17 @@ async function fetchSourcePage(url) {
   };
 }
 
-async function processOneUrl(url, excludeEmails) {
+async function processOneUrl(url, excludeEmails, options) {
   let tab = null;
+  const tabLoadTimeoutMs = options.tabLoadTimeoutMs;
 
   try {
+    if (stopRequested) {
+      return null;
+    }
+
     tab = await createTab(url);
-    await activateAndWait(tab.id);
+    await activateAndWait(tab.id, tabLoadTimeoutMs);
 
     const firstPass = await inspectTab(tab.id);
     const secondaryQueue = unique(firstPass.secondaryLinks).slice(0, MAX_SECONDARY_PAGES);
@@ -192,11 +204,16 @@ async function processOneUrl(url, excludeEmails) {
     let verificationSeen = firstPass.robotVerificationDetected || isRobotVerificationContent(firstPass.text) || isRobotVerificationContent(firstPass.html);
 
     for (const link of secondaryQueue) {
+      if (stopRequested) break;
       await chrome.tabs.update(tab.id, { url: link, active: true });
-      await activateAndWait(tab.id);
+      await activateAndWait(tab.id, tabLoadTimeoutMs);
       const secondaryPass = await inspectTab(tab.id);
       verificationSeen = verificationSeen || secondaryPass.robotVerificationDetected || isRobotVerificationContent(secondaryPass.text) || isRobotVerificationContent(secondaryPass.html);
       secondaryEmails.push(...secondaryPass.emails);
+    }
+
+    if (stopRequested) {
+      return null;
     }
 
     const sourceMainPromise = fetchSourcePage(url).catch(() => ({ html: '', emails: [], robotVerificationDetected: false }));
@@ -247,39 +264,132 @@ async function processOneUrl(url, excludeEmails) {
   }
 }
 
-async function runProcessing(urls, requestId, excludeEmails) {
-  const results = [];
+function resolveTimeoutMs(raw) {
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 1000) return DEFAULT_TAB_LOAD_TIMEOUT_MS;
+  return Math.round(value);
+}
 
-  await setRunState({ status: 'running', requestId, total: urls.length, current: 0, domain: '', results: [] });
+async function runProcessing(urls, requestId, excludeEmails, options, startIndex = 0, initialResults = []) {
+  const results = [...initialResults];
+  runInProgress = true;
+  stopRequested = false;
 
-  for (let i = 0; i < urls.length; i += 1) {
-    const url = urls[i];
-    const domain = (() => {
-      try {
-        return new URL(url).hostname;
-      } catch {
-        return url;
-      }
-    })();
-
-    await setRunState({ status: 'running', requestId, total: urls.length, current: i + 1, domain, results });
-
-    chrome.runtime.sendMessage({
-      type: 'PROCESS_PROGRESS',
+  try {
+    await setRunState({
+      status: 'running',
       requestId,
-      current: i + 1,
       total: urls.length,
-      domain
-    }).catch(() => {
-      // popup may be closed
+      current: startIndex,
+      domain: '',
+      results,
+      urls,
+      nextIndex: startIndex,
+      excludeEmails,
+      tabLoadTimeoutMs: options.tabLoadTimeoutMs
     });
 
-    const result = await processOneUrl(url, excludeEmails);
-    results.push(result);
-  }
+    for (let i = startIndex; i < urls.length; i += 1) {
+      if (stopRequested) {
+        await setRunState({
+          status: 'paused',
+          requestId,
+          total: urls.length,
+          current: i,
+          domain: '',
+          results,
+          urls,
+          nextIndex: i,
+          excludeEmails,
+          tabLoadTimeoutMs: options.tabLoadTimeoutMs
+        });
+        return results;
+      }
 
-  await setRunState({ status: 'done', requestId, total: urls.length, current: urls.length, domain: '', results });
-  return results;
+      const url = urls[i];
+      const domain = (() => {
+        try {
+          return new URL(url).hostname;
+        } catch {
+          return url;
+        }
+      })();
+
+      chrome.runtime.sendMessage({
+        type: 'PROCESS_PROGRESS',
+        requestId,
+        current: i + 1,
+        total: urls.length,
+        domain
+      }).catch(() => {
+        // popup may be closed
+      });
+
+      const result = await processOneUrl(url, excludeEmails, options);
+      if (result) {
+        results.push(result);
+
+        chrome.runtime.sendMessage({
+          type: 'PROCESS_RESULT',
+          requestId,
+          index: i,
+          result
+        }).catch(() => {
+          // popup may be closed
+        });
+      }
+
+      await setRunState({
+        status: stopRequested ? 'paused' : 'running',
+        requestId,
+        total: urls.length,
+        current: i + 1,
+        domain,
+        results,
+        urls,
+        nextIndex: i + 1,
+        excludeEmails,
+        tabLoadTimeoutMs: options.tabLoadTimeoutMs
+      });
+
+      if (stopRequested) {
+        return results;
+      }
+    }
+
+    await setRunState({
+      status: 'done',
+      requestId,
+      total: urls.length,
+      current: urls.length,
+      domain: '',
+      results,
+      urls,
+      nextIndex: urls.length,
+      excludeEmails,
+      tabLoadTimeoutMs: options.tabLoadTimeoutMs
+    });
+
+    return results;
+  } catch (error) {
+    const nextIndex = Math.min(results.length, urls.length);
+    await setRunState({
+      status: 'paused',
+      requestId,
+      total: urls.length,
+      current: nextIndex,
+      domain: '',
+      results,
+      urls,
+      nextIndex,
+      excludeEmails,
+      tabLoadTimeoutMs: options.tabLoadTimeoutMs
+    });
+    throw error;
+  } finally {
+    runInProgress = false;
+    stopRequested = false;
+  }
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -291,16 +401,82 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
-  if (message?.type !== 'PROCESS_URLS') return false;
+  if (message?.type === 'STOP_PROCESSING') {
+    stopRequested = true;
+    sendResponse({ ok: true });
+    return false;
+  }
 
-  const urls = unique((message.urls || []).map(normalizeUrl));
-  const requestId = message.requestId || '';
-  const excludeEmails = unique((message.excludeEmails || []).map((email) => String(email).toLowerCase().trim()).filter(Boolean));
+  if (message?.type === 'RESET_RUN_STATE') {
+    (async () => {
+      await clearRunState();
+      sendResponse({ ok: true });
+    })();
+    return true;
+  }
 
-  (async () => {
-    const results = await runProcessing(urls, requestId, excludeEmails);
-    sendResponse({ ok: true, results });
-  })();
+  if (message?.type === 'PROCESS_URLS') {
+    if (runInProgress) {
+      sendResponse({ ok: false, error: 'A run is already in progress.' });
+      return false;
+    }
 
-  return true;
+    const urls = (message.urls || []).map((item) => normalizeUrl(String(item || ''))).filter(Boolean);
+    const requestId = message.requestId || '';
+    const excludeEmails = unique((message.excludeEmails || []).map((email) => String(email).toLowerCase().trim()).filter(Boolean));
+    const options = {
+      tabLoadTimeoutMs: resolveTimeoutMs(message.tabLoadTimeoutMs)
+    };
+
+    (async () => {
+      try {
+        if (message.reset) await clearRunState();
+        const results = await runProcessing(urls, requestId, excludeEmails, options, 0, []);
+        sendResponse({ ok: true, results });
+      } catch (error) {
+        sendResponse({ ok: false, error: error instanceof Error ? error.message : 'Unknown error' });
+      }
+    })();
+
+    return true;
+  }
+
+  if (message?.type === 'PROCESS_REMAINING') {
+    if (runInProgress) {
+      sendResponse({ ok: false, error: 'A run is already in progress.' });
+      return false;
+    }
+
+    (async () => {
+      try {
+        const state = await getRunState();
+        if (!state?.urls?.length) {
+          sendResponse({ ok: false, error: 'No previous list found to continue.' });
+          return;
+        }
+
+        const startIndex = Math.max(0, Math.min(Number(state.nextIndex || state.results?.length || 0), state.urls.length));
+        const baseResults = Array.isArray(state.results) ? state.results.slice(0, startIndex) : [];
+        const excludeEmails = unique((message.excludeEmails || state.excludeEmails || []).map((email) => String(email).toLowerCase().trim()).filter(Boolean));
+        const requestId = message.requestId || '';
+        const options = {
+          tabLoadTimeoutMs: resolveTimeoutMs(message.tabLoadTimeoutMs || state.tabLoadTimeoutMs)
+        };
+
+        if (startIndex >= state.urls.length) {
+          sendResponse({ ok: true, results: state.results || [] });
+          return;
+        }
+
+        const results = await runProcessing(state.urls, requestId, excludeEmails, options, startIndex, baseResults);
+        sendResponse({ ok: true, results });
+      } catch (error) {
+        sendResponse({ ok: false, error: error instanceof Error ? error.message : 'Unknown error' });
+      }
+    })();
+
+    return true;
+  }
+
+  return false;
 });
