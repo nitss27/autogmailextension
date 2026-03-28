@@ -1,12 +1,13 @@
 const SETTINGS_KEY = 'excludeEmailsList';
-const SETTINGS_TIMEOUT_KEY = 'tabLoadTimeoutMs';
+const SETTINGS_TIMEOUT_KEY = 'strictTimeoutSeconds';
+const WEBSITE_LIST_KEY = 'websiteInputList';
 
 const input = document.getElementById('websiteInput');
 const excludeInput = document.getElementById('excludeInput');
 const timeoutInput = document.getElementById('timeoutInput');
-const processBtn = document.getElementById('processBtn');
-const continueBtn = document.getElementById('continueBtn');
+const startBtn = document.getElementById('startBtn');
 const stopBtn = document.getElementById('stopBtn');
+const skipBtn = document.getElementById('skipBtn');
 const copyBtn = document.getElementById('copyBtn');
 const clearListBtn = document.getElementById('clearListBtn');
 const statusEl = document.getElementById('status');
@@ -29,26 +30,30 @@ function parseExcludeList(raw) {
   )];
 }
 
-function parseTimeoutValue(raw) {
+function parseTimeoutSeconds(raw) {
   const value = String(raw || '').trim();
-  if (!value) return null;
   const numeric = Number(value);
-  if (!Number.isFinite(numeric) || numeric < 1000) return null;
+  if (!Number.isFinite(numeric) || numeric < 1) return 10;
   return Math.round(numeric);
 }
 
+function parseWebsiteInput() {
+  return input.value.split('\n').map((value) => value.trim()).filter(Boolean);
+}
+
 async function saveSettings() {
-  const tabLoadTimeoutMs = parseTimeoutValue(timeoutInput.value);
   await chrome.storage.local.set({
     [SETTINGS_KEY]: excludeInput.value,
-    [SETTINGS_TIMEOUT_KEY]: tabLoadTimeoutMs === null ? '' : String(tabLoadTimeoutMs)
+    [SETTINGS_TIMEOUT_KEY]: String(parseTimeoutSeconds(timeoutInput.value)),
+    [WEBSITE_LIST_KEY]: input.value
   });
 }
 
 async function loadSettings() {
-  const data = await chrome.storage.local.get([SETTINGS_KEY, SETTINGS_TIMEOUT_KEY]);
+  const data = await chrome.storage.local.get([SETTINGS_KEY, SETTINGS_TIMEOUT_KEY, WEBSITE_LIST_KEY]);
   excludeInput.value = data[SETTINGS_KEY] || '';
-  timeoutInput.value = data[SETTINGS_TIMEOUT_KEY] || '';
+  timeoutInput.value = data[SETTINGS_TIMEOUT_KEY] || '10';
+  input.value = data[WEBSITE_LIST_KEY] || '';
 }
 
 function renderResults(results) {
@@ -58,11 +63,9 @@ function renderResults(results) {
   }
 
   const rows = results.map((result) => {
-    const emails = result.emails?.length ? result.emails.join('<br>') : '<span class="small">No emails found</span>';
-    const errorLine = result.error ? `<div class="small">Error: ${result.error}</div>` : '';
-
+    const emails = result.emails?.length ? result.emails.join(', ') : '';
     return `<tr>
-      <td>${result.domain}${errorLine}</td>
+      <td>${result.website}</td>
       <td>${emails}</td>
     </tr>`;
   }).join('');
@@ -70,7 +73,7 @@ function renderResults(results) {
   resultsEl.innerHTML = `<table>
     <thead>
       <tr>
-        <th>Domain</th>
+        <th>Website</th>
         <th>Emails</th>
       </tr>
     </thead>
@@ -79,12 +82,8 @@ function renderResults(results) {
 }
 
 function toClipboardTable(results) {
-  const headers = ['Domain', 'Emails', 'Error'];
-  const rows = results.map((result) => [
-    result.domain,
-    (result.emails || []).join(', '),
-    result.error || ''
-  ]);
+  const headers = ['Website', 'Emails'];
+  const rows = results.map((result) => [result.website, (result.emails || []).join(', ')]);
   return [headers, ...rows].map((row) => row.join('\t')).join('\n');
 }
 
@@ -93,20 +92,17 @@ async function copyResults(results) {
 }
 
 function setProcessingUi(running) {
-  processBtn.disabled = running;
-  continueBtn.disabled = running;
+  startBtn.disabled = running;
   stopBtn.disabled = !running;
-}
-
-function getRunOptions() {
-  return {
-    tabLoadTimeoutMs: parseTimeoutValue(timeoutInput.value)
-  };
+  skipBtn.disabled = !running;
 }
 
 async function loadLatestState() {
   const response = await chrome.runtime.sendMessage({ type: 'GET_LATEST_RESULTS' });
-  if (!response?.ok || !response.state) return;
+  if (!response?.ok || !response.state) {
+    setProcessingUi(false);
+    return;
+  }
 
   const { state } = response;
 
@@ -126,14 +122,14 @@ async function loadLatestState() {
   setProcessingUi(false);
 
   if (state.status === 'done') {
-    setStatus(`Done. Processed ${state.total} website(s). You can copy the table now.`, 'success');
+    setStatus(`Done. Processed ${state.results?.length || 0} website(s).`, 'success');
     return;
   }
 
-  const nextIndex = Number(state.nextIndex || 0);
   const total = Array.isArray(state.urls) ? state.urls.length : 0;
-  if (state.status === 'paused' && nextIndex < total) {
-    setStatus(`Paused at ${nextIndex} of ${total}. Click Continue Left to process remaining websites.`, '');
+  const nextIndex = Number(state.nextIndex || 0);
+  if (state.status === 'paused') {
+    setStatus(`Paused at ${nextIndex} of ${total}. Click Start to resume.`, '');
   }
 }
 
@@ -146,41 +142,37 @@ chrome.runtime.onMessage.addListener((message) => {
   }
 
   if (message?.type === 'PROCESS_RESULT') {
-    const index = Number(message.index);
-    if (Number.isInteger(index) && index >= 0 && message.result) {
-      latestResults[index] = message.result;
-      renderResults(latestResults.filter(Boolean));
+    if (message.result) {
+      latestResults = [...latestResults, message.result];
+      renderResults(latestResults);
       copyBtn.disabled = true;
     }
   }
 });
 
-async function startNewProcessing() {
-  const urls = input.value.split('\n').map((value) => value.trim()).filter(Boolean);
+async function startProcessing() {
+  const urls = parseWebsiteInput();
   if (!urls.length) {
     setStatus('Please enter at least one website.', 'error');
     return;
   }
 
   const excludeEmails = parseExcludeList(excludeInput.value);
-  const options = getRunOptions();
+  const strictTimeoutSeconds = parseTimeoutSeconds(timeoutInput.value);
   await saveSettings();
 
   activeRequestId = crypto.randomUUID();
-  latestResults = [];
-  renderResults([]);
-  setStatus(`Processing 0 of ${urls.length}...`);
+  setStatus('Starting/resuming processing...');
   setProcessingUi(true);
   copyBtn.disabled = true;
 
   try {
     const response = await chrome.runtime.sendMessage({
-      type: 'PROCESS_URLS',
+      type: 'PROCESS_START',
       urls,
       excludeEmails,
       requestId: activeRequestId,
-      reset: true,
-      tabLoadTimeoutMs: options.tabLoadTimeoutMs
+      strictTimeoutSeconds
     });
 
     if (!response?.ok) {
@@ -189,53 +181,12 @@ async function startNewProcessing() {
 
     latestResults = response.results || [];
     renderResults(latestResults);
+    copyBtn.disabled = !latestResults.length;
 
-    if (latestResults.length) {
-      await copyResults(latestResults);
-      copyBtn.disabled = false;
-      setStatus(`Done. Processed ${latestResults.length} website(s). Table copied to clipboard.`, 'success');
+    if (response.status === 'paused') {
+      setStatus('Stopped immediately. Progress saved. Click Start to resume.', '');
     } else {
-      setStatus('No valid websites were provided.', 'error');
-    }
-  } catch (error) {
-    setStatus(`Failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
-  } finally {
-    setProcessingUi(false);
-    activeRequestId = null;
-  }
-}
-
-async function continueRemaining() {
-  const excludeEmails = parseExcludeList(excludeInput.value);
-  const options = getRunOptions();
-  await saveSettings();
-
-  activeRequestId = crypto.randomUUID();
-  setStatus('Continuing remaining websites...');
-  setProcessingUi(true);
-  copyBtn.disabled = true;
-
-  try {
-    const response = await chrome.runtime.sendMessage({
-      type: 'PROCESS_REMAINING',
-      requestId: activeRequestId,
-      excludeEmails,
-      tabLoadTimeoutMs: options.tabLoadTimeoutMs
-    });
-
-    if (!response?.ok) {
-      throw new Error(response?.error || 'No paused run found to continue.');
-    }
-
-    latestResults = response.results || [];
-    renderResults(latestResults);
-
-    if (latestResults.length) {
-      await copyResults(latestResults);
-      copyBtn.disabled = false;
-      setStatus(`Done. Processed ${latestResults.length} website(s). Table copied to clipboard.`, 'success');
-    } else {
-      setStatus('No results available to continue.', 'error');
+      setStatus(`Done. Processed ${latestResults.length} website(s).`, 'success');
     }
   } catch (error) {
     setStatus(`Failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
@@ -251,13 +202,27 @@ async function stopProcessing() {
     return;
   }
 
-  setStatus('Stopping after current website...');
-  stopBtn.disabled = true;
+  setStatus('Force-stopping now...');
 
   try {
     await chrome.runtime.sendMessage({ type: 'STOP_PROCESSING', requestId: activeRequestId });
   } catch {
     // ignore stop signal errors
+  }
+}
+
+async function skipCurrentWebsite() {
+  if (!activeRequestId) {
+    setStatus('No active run to skip.', 'error');
+    return;
+  }
+
+  setStatus('Skipping current website...');
+
+  try {
+    await chrome.runtime.sendMessage({ type: 'SKIP_CURRENT', requestId: activeRequestId });
+  } catch {
+    // ignore skip signal errors
   }
 }
 
@@ -269,6 +234,8 @@ async function clearListAndReset() {
   setStatus('Website list and current results cleared.');
   activeRequestId = null;
 
+  await chrome.storage.local.remove([WEBSITE_LIST_KEY]);
+
   try {
     await chrome.runtime.sendMessage({ type: 'RESET_RUN_STATE' });
   } catch {
@@ -276,9 +243,9 @@ async function clearListAndReset() {
   }
 }
 
-processBtn.addEventListener('click', startNewProcessing);
-continueBtn.addEventListener('click', continueRemaining);
+startBtn.addEventListener('click', startProcessing);
 stopBtn.addEventListener('click', stopProcessing);
+skipBtn.addEventListener('click', skipCurrentWebsite);
 clearListBtn.addEventListener('click', clearListAndReset);
 
 excludeInput.addEventListener('blur', () => {
@@ -288,6 +255,13 @@ excludeInput.addEventListener('blur', () => {
 });
 
 timeoutInput.addEventListener('blur', () => {
+  timeoutInput.value = String(parseTimeoutSeconds(timeoutInput.value));
+  saveSettings().catch(() => {
+    // ignore settings save errors
+  });
+});
+
+input.addEventListener('blur', () => {
   saveSettings().catch(() => {
     // ignore settings save errors
   });

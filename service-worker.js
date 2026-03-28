@@ -1,11 +1,15 @@
 const EMAIL_REGEX = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
-const DEFAULT_TAB_LOAD_TIMEOUT_MS = 15000;
+const DEFAULT_STRICT_TIMEOUT_SECONDS = 10;
 const TAB_SETTLE_MS = 50;
 const MAX_SECONDARY_PAGES = 3;
 const RUN_STATE_KEY = 'latestRunState';
 
 let runInProgress = false;
-let stopRequested = false;
+const runControl = {
+  action: 'none',
+  currentTabId: null,
+  currentAbortController: null
+};
 
 function normalizeUrl(input) {
   const raw = input.trim();
@@ -76,16 +80,22 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function createTab(url) {
-  return chrome.tabs.create({ url, active: true });
-}
-
 async function closeTab(tabId) {
   if (!tabId) return;
   try {
     await chrome.tabs.remove(tabId);
   } catch {
     // ignore
+  }
+}
+
+function interruptCurrentWebsite() {
+  const { currentTabId, currentAbortController } = runControl;
+  if (currentAbortController) {
+    currentAbortController.abort();
+  }
+  if (currentTabId) {
+    closeTab(currentTabId);
   }
 }
 
@@ -102,19 +112,16 @@ async function clearRunState() {
   await chrome.storage.local.remove(RUN_STATE_KEY);
 }
 
-function waitForTabComplete(tabId, timeoutMs = DEFAULT_TAB_LOAD_TIMEOUT_MS) {
+function waitForTabComplete(tabId) {
   return new Promise((resolve, reject) => {
     let done = false;
 
     const finish = (callback) => {
       if (done) return;
       done = true;
-      clearTimeout(timeout);
       chrome.tabs.onUpdated.removeListener(onUpdated);
       callback();
     };
-
-    const timeout = setTimeout(() => finish(() => reject(new Error('Tab load timeout'))), timeoutMs);
 
     const onUpdated = (updatedTabId, changeInfo) => {
       if (updatedTabId === tabId && changeInfo.status === 'complete') {
@@ -133,11 +140,30 @@ function waitForTabComplete(tabId, timeoutMs = DEFAULT_TAB_LOAD_TIMEOUT_MS) {
   });
 }
 
-async function activateAndWait(tabId, tabLoadTimeoutMs) {
+function withTimeout(promise, timeoutMs, timeoutErrorMessage, onTimeout) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      onTimeout?.();
+      reject(new Error(timeoutErrorMessage));
+    }, timeoutMs);
+
+    promise
+      .then((value) => {
+        clearTimeout(timeout);
+        resolve(value);
+      })
+      .catch((error) => {
+        clearTimeout(timeout);
+        reject(error);
+      });
+  });
+}
+
+async function activateAndWait(tabId, perSiteTimeoutMs) {
   const tab = await chrome.tabs.get(tabId);
   await chrome.windows.update(tab.windowId, { focused: true });
   await chrome.tabs.update(tabId, { active: true });
-  await waitForTabComplete(tabId, tabLoadTimeoutMs);
+  await withTimeout(waitForTabComplete(tabId), perSiteTimeoutMs, 'Website timed out', interruptCurrentWebsite);
   await sleep(TAB_SETTLE_MS);
 }
 
@@ -162,7 +188,6 @@ async function inspectTab(tabId) {
       const robotVerificationDetected = normalizedCombined.includes('verify your are human by completing the action below');
 
       return {
-        pageUrl: location.href,
         html,
         text,
         emails: [...new Set(emails.map((email) => email.trim().toLowerCase()).filter(Boolean))],
@@ -172,108 +197,122 @@ async function inspectTab(tabId) {
     }
   });
 
-  return injection?.result || { pageUrl: '', html: '', text: '', emails: [], secondaryLinks: [], robotVerificationDetected: false };
+  return injection?.result || { html: '', text: '', emails: [], secondaryLinks: [], robotVerificationDetected: false };
 }
 
-async function fetchSourcePage(url) {
-  const response = await fetch(url, { method: 'GET', redirect: 'follow', credentials: 'omit' });
+async function fetchSourcePage(url, signal) {
+  const response = await fetch(url, { method: 'GET', redirect: 'follow', credentials: 'omit', signal });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const html = await response.text();
   return {
-    html,
     emails: extractEmailsFromText(html),
     robotVerificationDetected: isRobotVerificationContent(html)
   };
 }
 
-async function processOneUrl(url, excludeEmails, options) {
-  let tab = null;
-  const tabLoadTimeoutMs = options.tabLoadTimeoutMs;
-
-  try {
-    if (stopRequested) {
-      return null;
-    }
-
-    tab = await createTab(url);
-    await activateAndWait(tab.id, tabLoadTimeoutMs);
-
-    const firstPass = await inspectTab(tab.id);
-    const secondaryQueue = unique(firstPass.secondaryLinks).slice(0, MAX_SECONDARY_PAGES);
-    const secondaryEmails = [];
-    let verificationSeen = firstPass.robotVerificationDetected || isRobotVerificationContent(firstPass.text) || isRobotVerificationContent(firstPass.html);
-
-    for (const link of secondaryQueue) {
-      if (stopRequested) break;
-      await chrome.tabs.update(tab.id, { url: link, active: true });
-      await activateAndWait(tab.id, tabLoadTimeoutMs);
-      const secondaryPass = await inspectTab(tab.id);
-      verificationSeen = verificationSeen || secondaryPass.robotVerificationDetected || isRobotVerificationContent(secondaryPass.text) || isRobotVerificationContent(secondaryPass.html);
-      secondaryEmails.push(...secondaryPass.emails);
-    }
-
-    if (stopRequested) {
-      return null;
-    }
-
-    const sourceMainPromise = fetchSourcePage(url).catch(() => ({ html: '', emails: [], robotVerificationDetected: false }));
-    const sourceSecondaryPromise = Promise.all(
-      secondaryQueue.map((link) => fetchSourcePage(link).catch(() => ({ html: '', emails: [], robotVerificationDetected: false })))
-    );
-
-    const sourceMain = await sourceMainPromise;
-    const sourceSecondary = await sourceSecondaryPromise;
-    verificationSeen = verificationSeen || sourceMain.robotVerificationDetected || sourceSecondary.some((item) => item.robotVerificationDetected);
-
-    const sourceEmailsMain = sourceMain.emails;
-    const sourceEmailsSecondary = sourceSecondary.flatMap((item) => item.emails);
-
-    const emails = filterExcludedEmails(unique([
-      ...firstPass.emails,
-      ...secondaryEmails,
-      ...sourceEmailsMain,
-      ...sourceEmailsSecondary
-    ]), excludeEmails);
-
-    if (!emails.length && verificationSeen) {
-      throw new Error('Skipped due to robot verification message. Verify first human.');
-    }
-
-    return {
-      url,
-      domain: new URL(url).hostname,
-      emails,
-      totalEmails: emails.length
-    };
-  } catch (error) {
-    return {
-      url,
-      domain: (() => {
-        try {
-          return new URL(url).hostname;
-        } catch {
-          return url;
-        }
-      })(),
-      emails: [],
-      totalEmails: 0,
-      error: error instanceof Error ? error.message : 'Unknown error'
-    };
-  } finally {
-    await closeTab(tab?.id);
-  }
-}
-
-function resolveTimeoutMs(raw) {
+function resolveStrictTimeoutSeconds(raw) {
   const value = Number(raw);
-  if (!Number.isFinite(value) || value < 1000) return DEFAULT_TAB_LOAD_TIMEOUT_MS;
+  if (!Number.isFinite(value) || value < 1) return DEFAULT_STRICT_TIMEOUT_SECONDS;
   return Math.round(value);
 }
 
-async function runProcessing(urls, requestId, excludeEmails, options, startIndex = 0, initialResults = []) {
-  const results = [...initialResults];
+function websiteFromUrl(url) {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return url;
+  }
+}
+
+async function processOneUrl(url, excludeEmails, options) {
+  const website = websiteFromUrl(url);
+  const abortController = new AbortController();
+  runControl.currentAbortController = abortController;
+  runControl.currentTabId = null;
+
+  const execute = async () => {
+    let tab = null;
+
+    try {
+      tab = await chrome.tabs.create({ url, active: true });
+      runControl.currentTabId = tab.id;
+      await activateAndWait(tab.id, options.strictTimeoutMs);
+
+      const firstPass = await inspectTab(tab.id);
+      const secondaryQueue = unique(firstPass.secondaryLinks).slice(0, MAX_SECONDARY_PAGES);
+      const secondaryEmails = [];
+      let verificationSeen = firstPass.robotVerificationDetected || isRobotVerificationContent(firstPass.text) || isRobotVerificationContent(firstPass.html);
+
+      for (const link of secondaryQueue) {
+        if (runControl.action === 'stop') throw new Error('__STOP__');
+        if (runControl.action === 'skip') throw new Error('__SKIP__');
+
+        await chrome.tabs.update(tab.id, { url: link, active: true });
+        await activateAndWait(tab.id, options.strictTimeoutMs);
+        const secondaryPass = await inspectTab(tab.id);
+        verificationSeen = verificationSeen || secondaryPass.robotVerificationDetected || isRobotVerificationContent(secondaryPass.text) || isRobotVerificationContent(secondaryPass.html);
+        secondaryEmails.push(...secondaryPass.emails);
+      }
+
+      const sourceMainPromise = fetchSourcePage(url, abortController.signal).catch(() => ({ emails: [], robotVerificationDetected: false }));
+      const sourceSecondaryPromise = Promise.all(
+        secondaryQueue.map((link) => fetchSourcePage(link, abortController.signal).catch(() => ({ emails: [], robotVerificationDetected: false })))
+      );
+
+      const [sourceMain, sourceSecondary] = await Promise.all([sourceMainPromise, sourceSecondaryPromise]);
+      verificationSeen = verificationSeen || sourceMain.robotVerificationDetected || sourceSecondary.some((item) => item.robotVerificationDetected);
+
+      const sourceEmailsSecondary = sourceSecondary.flatMap((item) => item.emails);
+      const emails = filterExcludedEmails(unique([
+        ...firstPass.emails,
+        ...secondaryEmails,
+        ...sourceMain.emails,
+        ...sourceEmailsSecondary
+      ]), excludeEmails);
+
+      if (!emails.length && verificationSeen) {
+        return { website, emails: [], error: 'Skipped due to robot verification message. Verify first human.' };
+      }
+
+      return { website, emails };
+    } finally {
+      await closeTab(tab?.id);
+    }
+  };
+
+  try {
+    const result = await withTimeout(execute(), options.strictTimeoutMs, 'Website timed out', interruptCurrentWebsite);
+    return { type: 'result', result };
+  } catch (error) {
+    if (runControl.action === 'stop' || error?.message === '__STOP__') {
+      return { type: 'stopped' };
+    }
+    if (runControl.action === 'skip' || error?.message === '__SKIP__') {
+      return { type: 'result', result: { website, emails: [], error: 'Skipped manually.' } };
+    }
+    if (String(error?.message || '').includes('timed out')) {
+      return { type: 'result', result: { website, emails: [], error: `Skipped after ${options.strictTimeoutSeconds}s timeout.` } };
+    }
+
+    return {
+      type: 'result',
+      result: { website, emails: [], error: error instanceof Error ? error.message : 'Unknown error' }
+    };
+  } finally {
+    runControl.currentAbortController = null;
+    runControl.currentTabId = null;
+    if (runControl.action === 'skip') {
+      runControl.action = 'none';
+    }
+  }
+}
+
+async function runProcessing({ urls, requestId, excludeEmails, options, startIndex, initialResults }) {
+  let results = [...initialResults];
+  const completedWebsites = new Set(results.map((item) => item.website));
+
   runInProgress = true;
-  stopRequested = false;
+  runControl.action = 'none';
 
   try {
     await setRunState({
@@ -286,11 +325,11 @@ async function runProcessing(urls, requestId, excludeEmails, options, startIndex
       urls,
       nextIndex: startIndex,
       excludeEmails,
-      tabLoadTimeoutMs: options.tabLoadTimeoutMs
+      strictTimeoutSeconds: options.strictTimeoutSeconds
     });
 
     for (let i = startIndex; i < urls.length; i += 1) {
-      if (stopRequested) {
+      if (runControl.action === 'stop') {
         await setRunState({
           status: 'paused',
           requestId,
@@ -301,60 +340,80 @@ async function runProcessing(urls, requestId, excludeEmails, options, startIndex
           urls,
           nextIndex: i,
           excludeEmails,
-          tabLoadTimeoutMs: options.tabLoadTimeoutMs
+          strictTimeoutSeconds: options.strictTimeoutSeconds
         });
-        return results;
+        return { results, status: 'paused' };
       }
 
       const url = urls[i];
-      const domain = (() => {
-        try {
-          return new URL(url).hostname;
-        } catch {
-          return url;
-        }
-      })();
+      const website = websiteFromUrl(url);
+      if (completedWebsites.has(website)) {
+        await setRunState({
+          status: 'running',
+          requestId,
+          total: urls.length,
+          current: i + 1,
+          domain: website,
+          results,
+          urls,
+          nextIndex: i + 1,
+          excludeEmails,
+          strictTimeoutSeconds: options.strictTimeoutSeconds
+        });
+        continue;
+      }
 
       chrome.runtime.sendMessage({
         type: 'PROCESS_PROGRESS',
         requestId,
         current: i + 1,
         total: urls.length,
-        domain
+        domain: website
       }).catch(() => {
         // popup may be closed
       });
 
-      const result = await processOneUrl(url, excludeEmails, options);
-      if (result) {
-        results.push(result);
+      const outcome = await processOneUrl(url, excludeEmails, options);
 
-        chrome.runtime.sendMessage({
-          type: 'PROCESS_RESULT',
+      if (outcome.type === 'stopped') {
+        await setRunState({
+          status: 'paused',
           requestId,
-          index: i,
-          result
-        }).catch(() => {
-          // popup may be closed
+          total: urls.length,
+          current: i,
+          domain: website,
+          results,
+          urls,
+          nextIndex: i,
+          excludeEmails,
+          strictTimeoutSeconds: options.strictTimeoutSeconds
         });
+        return { results, status: 'paused' };
       }
 
+      results = [...results, outcome.result];
+      completedWebsites.add(outcome.result.website);
+
+      chrome.runtime.sendMessage({
+        type: 'PROCESS_RESULT',
+        requestId,
+        result: outcome.result
+      }).catch(() => {
+        // popup may be closed
+      });
+
       await setRunState({
-        status: stopRequested ? 'paused' : 'running',
+        status: 'running',
         requestId,
         total: urls.length,
         current: i + 1,
-        domain,
+        domain: website,
         results,
         urls,
         nextIndex: i + 1,
         excludeEmails,
-        tabLoadTimeoutMs: options.tabLoadTimeoutMs
+        strictTimeoutSeconds: options.strictTimeoutSeconds
       });
-
-      if (stopRequested) {
-        return results;
-      }
     }
 
     await setRunState({
@@ -367,28 +426,15 @@ async function runProcessing(urls, requestId, excludeEmails, options, startIndex
       urls,
       nextIndex: urls.length,
       excludeEmails,
-      tabLoadTimeoutMs: options.tabLoadTimeoutMs
+      strictTimeoutSeconds: options.strictTimeoutSeconds
     });
 
-    return results;
-  } catch (error) {
-    const nextIndex = Math.min(results.length, urls.length);
-    await setRunState({
-      status: 'paused',
-      requestId,
-      total: urls.length,
-      current: nextIndex,
-      domain: '',
-      results,
-      urls,
-      nextIndex,
-      excludeEmails,
-      tabLoadTimeoutMs: options.tabLoadTimeoutMs
-    });
-    throw error;
+    return { results, status: 'done' };
   } finally {
     runInProgress = false;
-    stopRequested = false;
+    runControl.action = 'none';
+    runControl.currentAbortController = null;
+    runControl.currentTabId = null;
   }
 }
 
@@ -402,7 +448,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message?.type === 'STOP_PROCESSING') {
-    stopRequested = true;
+    runControl.action = 'stop';
+    interruptCurrentWebsite();
+    sendResponse({ ok: true });
+    return false;
+  }
+
+  if (message?.type === 'SKIP_CURRENT') {
+    runControl.action = 'skip';
+    interruptCurrentWebsite();
     sendResponse({ ok: true });
     return false;
   }
@@ -415,33 +469,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
-  if (message?.type === 'PROCESS_URLS') {
-    if (runInProgress) {
-      sendResponse({ ok: false, error: 'A run is already in progress.' });
-      return false;
-    }
-
-    const urls = (message.urls || []).map((item) => normalizeUrl(String(item || ''))).filter(Boolean);
-    const requestId = message.requestId || '';
-    const excludeEmails = unique((message.excludeEmails || []).map((email) => String(email).toLowerCase().trim()).filter(Boolean));
-    const options = {
-      tabLoadTimeoutMs: resolveTimeoutMs(message.tabLoadTimeoutMs)
-    };
-
-    (async () => {
-      try {
-        if (message.reset) await clearRunState();
-        const results = await runProcessing(urls, requestId, excludeEmails, options, 0, []);
-        sendResponse({ ok: true, results });
-      } catch (error) {
-        sendResponse({ ok: false, error: error instanceof Error ? error.message : 'Unknown error' });
-      }
-    })();
-
-    return true;
-  }
-
-  if (message?.type === 'PROCESS_REMAINING') {
+  if (message?.type === 'PROCESS_START') {
     if (runInProgress) {
       sendResponse({ ok: false, error: 'A run is already in progress.' });
       return false;
@@ -449,27 +477,45 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     (async () => {
       try {
-        const state = await getRunState();
-        if (!state?.urls?.length) {
-          sendResponse({ ok: false, error: 'No previous list found to continue.' });
-          return;
-        }
-
-        const startIndex = Math.max(0, Math.min(Number(state.nextIndex || state.results?.length || 0), state.urls.length));
-        const baseResults = Array.isArray(state.results) ? state.results.slice(0, startIndex) : [];
-        const excludeEmails = unique((message.excludeEmails || state.excludeEmails || []).map((email) => String(email).toLowerCase().trim()).filter(Boolean));
         const requestId = message.requestId || '';
-        const options = {
-          tabLoadTimeoutMs: resolveTimeoutMs(message.tabLoadTimeoutMs || state.tabLoadTimeoutMs)
-        };
+        const inputUrls = (message.urls || []).map((item) => normalizeUrl(String(item || ''))).filter(Boolean);
+        const excludeEmails = unique((message.excludeEmails || []).map((email) => String(email).toLowerCase().trim()).filter(Boolean));
+        const strictTimeoutSeconds = resolveStrictTimeoutSeconds(message.strictTimeoutSeconds);
 
-        if (startIndex >= state.urls.length) {
-          sendResponse({ ok: true, results: state.results || [] });
+        const existingState = await getRunState();
+        const shouldResume = existingState?.status === 'paused' && Array.isArray(existingState.urls) && existingState.urls.length > 0;
+
+        const urls = shouldResume ? existingState.urls : inputUrls;
+        if (!urls.length) {
+          sendResponse({ ok: false, error: 'No valid websites were provided.' });
           return;
         }
 
-        const results = await runProcessing(state.urls, requestId, excludeEmails, options, startIndex, baseResults);
-        sendResponse({ ok: true, results });
+        const startIndex = shouldResume
+          ? Math.max(0, Math.min(Number(existingState.nextIndex || 0), urls.length))
+          : 0;
+
+        const baseResults = shouldResume && Array.isArray(existingState.results)
+          ? existingState.results.slice()
+          : [];
+
+        const finalExcludeEmails = shouldResume && !excludeEmails.length
+          ? unique((existingState.excludeEmails || []).map((email) => String(email).toLowerCase().trim()).filter(Boolean))
+          : excludeEmails;
+
+        const response = await runProcessing({
+          urls,
+          requestId,
+          excludeEmails: finalExcludeEmails,
+          options: {
+            strictTimeoutSeconds,
+            strictTimeoutMs: strictTimeoutSeconds * 1000
+          },
+          startIndex,
+          initialResults: baseResults
+        });
+
+        sendResponse({ ok: true, results: response.results, status: response.status });
       } catch (error) {
         sendResponse({ ok: false, error: error instanceof Error ? error.message : 'Unknown error' });
       }

@@ -9,7 +9,7 @@
   <body>
     <main>
       <h1>Bulk Email Extractor</h1>
-      <p>Paste one URL/domain per line and click Start. The extension visits each site tab, then contact/about pages, and closes tabs automatically.</p>
+      <p>Paste one URL/domain per line. Start resumes from the latest paused state, Stop force-halts immediately, and Skip moves to the next website.</p>
 
       <label class="fieldLabel" for="websiteInput">Website list</label>
       <textarea id="websiteInput" placeholder="example.com&#10;https://openai.com"></textarea>
@@ -17,13 +17,13 @@
       <label class="fieldLabel" for="excludeInput">Exclude emails/domains (one per line, saved; use @domain.com)</label>
       <textarea id="excludeInput" class="excludeBox" placeholder="info@example.com&#10;support@example.com"></textarea>
 
-      <label class="fieldLabel" for="timeoutInput">Tab load timeout (ms, optional; saved)</label>
-      <input id="timeoutInput" type="number" min="1000" step="500" placeholder="Default: 15000" class="smallInput" />
+      <label class="fieldLabel" for="timeoutInput">Strict website timeout (seconds, saved)</label>
+      <input id="timeoutInput" type="number" min="1" step="1" value="10" class="smallInput" />
 
       <div class="actions">
-        <button id="processBtn">Start New</button>
-        <button id="continueBtn">Continue Left</button>
+        <button id="startBtn">Start</button>
         <button id="stopBtn" class="danger">Stop</button>
+        <button id="skipBtn" class="secondary">Skip</button>
         <button id="clearListBtn" class="secondary">Clear List</button>
         <button id="copyBtn" disabled>Copy Table</button>
       </div>
