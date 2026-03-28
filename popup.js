@@ -68,17 +68,19 @@ function renderResults(results) {
 
   const rows = results.map((result) => {
     const emails = result.emails?.length ? escapeHtml(result.emails.join(', ')) : '<span class="small">No emails found</span>';
-    return `<tr><td>${escapeHtml(result.domain)}</td><td>${emails}</td></tr>`;
+    const error = result.error ? escapeHtml(result.error) : '';
+    return `<tr><td>${escapeHtml(result.domain)}</td><td>${emails}</td><td>${error}</td></tr>`;
   }).join('');
 
-  resultsEl.innerHTML = `<table><thead><tr><th>Website</th><th>Emails</th></tr></thead><tbody>${rows}</tbody></table>`;
+  resultsEl.innerHTML = `<table><thead><tr><th>Domain</th><th>Emails</th><th>Error</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 function toClipboardTable(results) {
-  const headers = ['Website', 'Emails'];
+  const headers = ['Domain', 'Emails', 'Error'];
   const rows = results.map((result) => [
     sanitizeCell(result.domain),
-    sanitizeCell((result.emails || []).join(', '))
+    sanitizeCell((result.emails || []).join(', ')),
+    sanitizeCell(result.error || '')
   ]);
   return [headers, ...rows].map((row) => row.join('\t')).join('\n');
 }
@@ -86,9 +88,10 @@ function toClipboardTable(results) {
 function toClipboardHtmlTable(results) {
   const rows = results.map((result) => {
     const emails = escapeHtml((result.emails || []).join(', '));
-    return `<tr><td>${escapeHtml(result.domain)}</td><td>${emails || ''}</td></tr>`;
+    const error = escapeHtml(result.error || '');
+    return `<tr><td>${escapeHtml(result.domain)}</td><td>${emails || ''}</td><td>${error}</td></tr>`;
   }).join('');
-  return `<table><thead><tr><th>Website</th><th>Emails</th></tr></thead><tbody>${rows}</tbody></table>`;
+  return `<table><thead><tr><th>Domain</th><th>Emails</th><th>Error</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 async function copyResults(results) {

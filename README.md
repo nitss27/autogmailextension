@@ -22,11 +22,16 @@ For each URL (one-by-one):
 - **Stop**: immediately pauses processing.
 - **Skip Current**: immediately skips the active website and continues.
 - **Clear List**: clears the website input box.
-- **Copy Table**: copies exactly 2 columns (`Website`, `Emails`) with emails comma-separated in one cell.
+- **Copy Table**: copies TSV/HTML table with columns (`Domain`, `Emails`, `Error`), and emails comma-separated in one cell.
 
 The popup stores state/results in extension storage, so reopening still shows progress/results.
 Live results keep updating while the run is active, and previously collected rows remain visible after popup reopen.
 Copy uses both plain-text TSV and HTML table formats for better Excel/Sheets cell alignment.
+
+## Notes
+
+If a site contains `Verify your are human by completing the action below` and no emails are found, that site is marked with:
+`Skipped due to robot verification message. Verify first human.`
 
 You can use **Exclude emails** rules (saved automatically):
 - `person@example.com` excludes that exact email.

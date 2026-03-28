@@ -52,6 +52,11 @@ function decodeCloudflareEmail(hexString) {
   }
 }
 
+function isRobotVerificationContent(text) {
+  const normalized = String(text || '').toLowerCase();
+  return normalized.includes('verify your are human by completing the action below');
+}
+
 function filterExcludedEmails(emails, excludeEmails) {
   if (!excludeEmails?.length) return emails;
 
@@ -228,6 +233,9 @@ async function inspectTab(tabId) {
         ...dataAttrEmails,
         ...cloudflareEmails
       ];
+      const robotVerificationDetected = `${text}\n${html}`
+        .toLowerCase()
+        .includes('verify your are human by completing the action below');
 
       const secondaryPattern = /(contact|about|support|team|impressum|legal|company|get[-_]?in[-_]?touch)/i;
       const secondaryLinks = [...document.querySelectorAll('a[href]')]
@@ -237,12 +245,13 @@ async function inspectTab(tabId) {
       return {
         pageUrl: location.href,
         emails: [...new Set(emails.map((email) => email.trim().toLowerCase()).filter(Boolean))],
-        secondaryLinks: [...new Set(secondaryLinks)]
+        secondaryLinks: [...new Set(secondaryLinks)],
+        robotVerificationDetected
       };
     }
   });
 
-  return injection?.result || { pageUrl: '', emails: [], secondaryLinks: [] };
+  return injection?.result || { pageUrl: '', emails: [], secondaryLinks: [], robotVerificationDetected: false };
 }
 
 async function fetchSourceEmails(url) {
@@ -252,7 +261,10 @@ async function fetchSourceEmails(url) {
   const cloudflareMatches = [...source.matchAll(/data-cfemail=["']([a-fA-F0-9]+)["']/g)]
     .map((match) => decodeCloudflareEmail(match[1]));
   const basic = extractEmailsFromText(source);
-  return unique([...basic, ...cloudflareMatches].map((email) => String(email || '').toLowerCase()));
+  return {
+    emails: unique([...basic, ...cloudflareMatches].map((email) => String(email || '').toLowerCase())),
+    robotVerificationDetected: isRobotVerificationContent(source)
+  };
 }
 
 function buildDomain(url) {
@@ -277,6 +289,7 @@ async function processOneUrl(url, excludeEmails, strictTimeoutMs, tabLoadTimeout
     const firstPass = await inspectTab(tab.id);
     const secondaryQueue = unique(firstPass.secondaryLinks).slice(0, MAX_SECONDARY_PAGES);
     const secondaryEmails = [];
+    let robotVerificationSeen = firstPass.robotVerificationDetected;
 
     for (const link of secondaryQueue) {
       if (isInterrupted(runToken)) throw new Error(interruptReason(runToken));
@@ -284,24 +297,41 @@ async function processOneUrl(url, excludeEmails, strictTimeoutMs, tabLoadTimeout
       await activateAndWait(tab.id, tabLoadTimeoutMs, runToken);
       const secondaryPass = await inspectTab(tab.id);
       secondaryEmails.push(...secondaryPass.emails);
+      robotVerificationSeen = robotVerificationSeen || secondaryPass.robotVerificationDetected;
     }
 
     if (isInterrupted(runToken)) throw new Error(interruptReason(runToken));
 
-    const sourceEmailsMainPromise = fetchSourceEmails(url).catch(() => []);
+    const sourceEmailsMainPromise = fetchSourceEmails(url).catch(() => ({ emails: [], robotVerificationDetected: false }));
     const sourceEmailsSecondaryPromise = Promise.all(
-      secondaryQueue.map((link) => fetchSourceEmails(link).catch(() => []))
+      secondaryQueue.map((link) => fetchSourceEmails(link).catch(() => ({ emails: [], robotVerificationDetected: false })))
     );
 
     const sourceEmailsMain = await sourceEmailsMainPromise;
-    const sourceEmailsSecondary = (await sourceEmailsSecondaryPromise).flat();
+    const sourceEmailsSecondary = await sourceEmailsSecondaryPromise;
+    robotVerificationSeen = robotVerificationSeen
+      || sourceEmailsMain.robotVerificationDetected
+      || sourceEmailsSecondary.some((item) => item.robotVerificationDetected);
 
     const emails = filterExcludedEmails(unique([
       ...firstPass.emails,
       ...secondaryEmails,
-      ...sourceEmailsMain,
-      ...sourceEmailsSecondary
+      ...sourceEmailsMain.emails,
+      ...sourceEmailsSecondary.flatMap((item) => item.emails)
     ]), excludeEmails);
+
+    if (!emails.length && robotVerificationSeen) {
+      return {
+        status: 'error',
+        result: {
+          url,
+          domain,
+          emails: [],
+          totalEmails: 0,
+          error: 'Skipped due to robot verification message. Verify first human.'
+        }
+      };
+    }
 
     return {
       status: 'ok',
