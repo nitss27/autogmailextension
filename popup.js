@@ -1,8 +1,12 @@
 const SETTINGS_KEY = 'excludeEmailsList';
+const TIMEOUT_KEY = 'strictTimeoutSec';
 
 const input = document.getElementById('websiteInput');
 const excludeInput = document.getElementById('excludeInput');
-const processBtn = document.getElementById('processBtn');
+const strictTimeoutInput = document.getElementById('strictTimeoutSec');
+const startBtn = document.getElementById('startBtn');
+const stopBtn = document.getElementById('stopBtn');
+const skipBtn = document.getElementById('skipBtn');
 const copyBtn = document.getElementById('copyBtn');
 const statusEl = document.getElementById('status');
 const resultsEl = document.getElementById('results');
@@ -41,12 +45,16 @@ function escapeHtml(value) {
 }
 
 async function saveSettings() {
-  await chrome.storage.local.set({ [SETTINGS_KEY]: excludeInput.value });
+  await chrome.storage.local.set({
+    [SETTINGS_KEY]: excludeInput.value,
+    [TIMEOUT_KEY]: strictTimeoutInput.value
+  });
 }
 
 async function loadSettings() {
-  const data = await chrome.storage.local.get(SETTINGS_KEY);
+  const data = await chrome.storage.local.get([SETTINGS_KEY, TIMEOUT_KEY]);
   excludeInput.value = data[SETTINGS_KEY] || '';
+  strictTimeoutInput.value = data[TIMEOUT_KEY] || '10';
 }
 
 function renderResults(results) {
@@ -66,12 +74,7 @@ function renderResults(results) {
   }).join('');
 
   resultsEl.innerHTML = `<table>
-    <thead>
-      <tr>
-        <th>Domain</th>
-        <th>Emails</th>
-      </tr>
-    </thead>
+    <thead><tr><th>Domain</th><th>Emails</th></tr></thead>
     <tbody>${rows}</tbody>
   </table>`;
 }
@@ -83,22 +86,15 @@ function toClipboardTable(results) {
     sanitizeCell((result.emails || []).join(', ')),
     sanitizeCell(result.error || '')
   ]);
-
   return [headers, ...rows].map((row) => row.join('\t')).join('\n');
 }
 
 function toClipboardHtmlTable(results) {
-  const headerHtml = '<tr><th>Domain</th><th>Emails</th><th>Error</th></tr>';
-  const rowHtml = results.map((result) => {
+  const rows = results.map((result) => {
     const emails = (result.emails || []).map((email) => escapeHtml(email)).join('<br>');
-    return `<tr>
-      <td>${escapeHtml(result.domain)}</td>
-      <td>${emails || ''}</td>
-      <td>${escapeHtml(result.error || '')}</td>
-    </tr>`;
+    return `<tr><td>${escapeHtml(result.domain)}</td><td>${emails || ''}</td><td>${escapeHtml(result.error || '')}</td></tr>`;
   }).join('');
-
-  return `<table><thead>${headerHtml}</thead><tbody>${rowHtml}</tbody></table>`;
+  return `<table><thead><tr><th>Domain</th><th>Emails</th><th>Error</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 async function copyResults(results) {
@@ -106,15 +102,37 @@ async function copyResults(results) {
   const htmlText = toClipboardHtmlTable(results);
 
   if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
-    const item = new ClipboardItem({
-      'text/plain': new Blob([plainText], { type: 'text/plain' }),
-      'text/html': new Blob([htmlText], { type: 'text/html' })
-    });
-    await navigator.clipboard.write([item]);
+    await navigator.clipboard.write([
+      new ClipboardItem({
+        'text/plain': new Blob([plainText], { type: 'text/plain' }),
+        'text/html': new Blob([htmlText], { type: 'text/html' })
+      })
+    ]);
     return;
   }
 
   await navigator.clipboard.writeText(plainText);
+}
+
+function applyStateToUi(state) {
+  const isRunning = state?.status === 'running';
+  startBtn.disabled = isRunning;
+  stopBtn.disabled = !isRunning;
+  skipBtn.disabled = !isRunning;
+
+  if (Array.isArray(state?.results)) {
+    latestResults = state.results;
+    renderResults(latestResults);
+    copyBtn.disabled = latestResults.length === 0;
+  }
+
+  if (state?.status === 'paused') {
+    setStatus(`Paused at ${state.current} of ${state.total}. Click Start / Resume to continue.`, 'error');
+  } else if (state?.status === 'done') {
+    setStatus(`Done. Processed ${state.total} website(s).`, 'success');
+  } else if (isRunning) {
+    setStatus(`Processing ${state.current} of ${state.total}: ${state.domain || '...'}`);
+  }
 }
 
 async function loadLatestState() {
@@ -122,80 +140,82 @@ async function loadLatestState() {
   if (!response?.ok || !response.state) return;
 
   const { state } = response;
-  if (state.status === 'running') {
-    activeRequestId = state.requestId || activeRequestId;
-    setStatus(`Processing ${state.current} of ${state.total}: ${state.domain || '...'}`);
-    processBtn.disabled = true;
-  }
-
-  if (Array.isArray(state.results) && state.results.length) {
-    latestResults = state.results;
-    renderResults(latestResults);
-    copyBtn.disabled = false;
-
-    if (state.status === 'done') {
-      setStatus(`Done. Processed ${state.total} website(s). You can copy the table now.`, 'success');
-      processBtn.disabled = false;
-    }
-  }
+  activeRequestId = state.requestId || activeRequestId;
+  applyStateToUi(state);
 }
 
 chrome.runtime.onMessage.addListener((message) => {
   if (message?.type !== 'PROCESS_PROGRESS') return;
   if (!activeRequestId || message.requestId !== activeRequestId) return;
 
-  setStatus(`Processing ${message.current} of ${message.total}: ${message.domain}`);
+  const suffix = message.note ? ` — ${message.note}` : '';
+  setStatus(`Processing ${message.current} of ${message.total}: ${message.domain}${suffix}`);
 });
 
-async function processWebsites() {
+async function startOrResume() {
   const urls = input.value.split('\n').map((value) => value.trim()).filter(Boolean);
-  if (!urls.length) {
-    setStatus('Please enter at least one website.', 'error');
-    return;
-  }
-
   const excludeEmails = parseExcludeList(excludeInput.value);
-  await saveSettings();
+  const strictTimeoutSec = Math.max(1, Math.min(120, Number(strictTimeoutInput.value) || 10));
+  strictTimeoutInput.value = String(strictTimeoutSec);
 
+  await saveSettings();
   activeRequestId = crypto.randomUUID();
-  setStatus(`Processing 0 of ${urls.length}...`);
-  processBtn.disabled = true;
+
+  startBtn.disabled = true;
+  stopBtn.disabled = false;
+  skipBtn.disabled = false;
   copyBtn.disabled = true;
 
   try {
     const response = await chrome.runtime.sendMessage({
-      type: 'PROCESS_URLS',
+      type: 'START_OR_RESUME',
+      requestId: activeRequestId,
       urls,
       excludeEmails,
-      requestId: activeRequestId
+      strictTimeoutSec
     });
 
-    if (!response?.ok) {
-      throw new Error('Unexpected extension response.');
-    }
+    if (!response?.ok) throw new Error('Unexpected extension response.');
 
-    latestResults = response.results || [];
-    renderResults(latestResults);
-
-    if (latestResults.length) {
-      await copyResults(latestResults);
-      copyBtn.disabled = false;
-      setStatus(`Done. Processed ${latestResults.length} website(s). Table copied to clipboard.`, 'success');
-    } else {
-      setStatus('No valid websites were provided.', 'error');
+    const state = response.state || null;
+    if (state) {
+      applyStateToUi(state);
+      if (state.status === 'done' && latestResults.length) {
+        await copyResults(latestResults);
+      }
     }
   } catch (error) {
     setStatus(`Failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
-  } finally {
-    processBtn.disabled = false;
-    activeRequestId = null;
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
+    skipBtn.disabled = true;
   }
 }
 
-processBtn.addEventListener('click', processWebsites);
-excludeInput.addEventListener('blur', () => {
-  saveSettings().catch(() => {
-    // ignore settings save errors
+async function stopProcess() {
+  await chrome.runtime.sendMessage({ type: 'STOP_PROCESS' });
+  await loadLatestState();
+}
+
+async function skipCurrent() {
+  await chrome.runtime.sendMessage({ type: 'SKIP_CURRENT' });
+}
+
+startBtn.addEventListener('click', () => {
+  startOrResume().catch(() => {
+    setStatus('Failed to start/resume process.', 'error');
+  });
+});
+
+stopBtn.addEventListener('click', () => {
+  stopProcess().catch(() => {
+    setStatus('Failed to stop process.', 'error');
+  });
+});
+
+skipBtn.addEventListener('click', () => {
+  skipCurrent().catch(() => {
+    setStatus('Failed to skip current website.', 'error');
   });
 });
 
@@ -213,6 +233,18 @@ copyBtn.addEventListener('click', async () => {
   }
 });
 
+excludeInput.addEventListener('blur', () => {
+  saveSettings().catch(() => {
+    // ignore settings save errors
+  });
+});
+
+strictTimeoutInput.addEventListener('blur', () => {
+  saveSettings().catch(() => {
+    // ignore settings save errors
+  });
+});
+
 Promise.all([loadSettings(), loadLatestState()]).catch(() => {
-  // ignore bootstrap state errors
+  // ignore bootstrap errors
 });

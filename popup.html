@@ -9,16 +9,21 @@
   <body>
     <main>
       <h1>Bulk Email Extractor</h1>
-      <p>Paste one URL/domain per line and click Start. The extension visits each site tab, then contact/about pages, and closes tabs automatically.</p>
+      <p>Sequential active-tab scraping with pause/resume, skip-current, and strict per-site timeout.</p>
 
       <label class="fieldLabel" for="websiteInput">Website list</label>
       <textarea id="websiteInput" placeholder="example.com&#10;https://openai.com"></textarea>
 
       <label class="fieldLabel" for="excludeInput">Exclude emails/domains (one per line, saved; use @domain.com)</label>
-      <textarea id="excludeInput" class="excludeBox" placeholder="info@example.com&#10;support@example.com"></textarea>
+      <textarea id="excludeInput" class="excludeBox" placeholder="info@example.com&#10;@wixpress.com"></textarea>
+
+      <label class="fieldLabel" for="strictTimeoutSec">Strict timeout per website (seconds)</label>
+      <input id="strictTimeoutSec" type="number" min="1" max="120" value="10" />
 
       <div class="actions">
-        <button id="processBtn">Start</button>
+        <button id="startBtn">Start / Resume</button>
+        <button id="stopBtn" disabled>Stop</button>
+        <button id="skipBtn" disabled>Skip Current</button>
         <button id="copyBtn" disabled>Copy Table</button>
       </div>
 

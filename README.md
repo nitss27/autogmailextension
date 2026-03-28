@@ -11,15 +11,21 @@ For each URL (one-by-one):
 3. Extract emails from `document.documentElement.innerHTML` + `mailto:` links.
 4. Discover `contact` / `about` links.
 5. Navigate the **same tab** to those secondary pages and extract more emails.
-6. Also fetch raw page source for main + secondary pages for source-level emails (secondary source fetches run in parallel for speed).
-7. Deduplicate emails per domain.
+6. Fetch raw page source for main + secondary pages for source-level emails.
+7. Deduplicate and apply exclude rules.
 8. Close the tab and move to the next URL.
 
-The popup shows live progress (`Processing X of Y...`) and stores run state/results in extension storage, so reopening the popup still shows output for copying. It exports a copyable TSV table (`Domain | Emails | Error`).
-Copy uses both plain-text TSV and HTML table formats so Excel/Google Sheets paste each value into separate cells more reliably.
+## Controls
 
+- **Start / Resume**: starts a new run, or resumes from last paused index.
+- **Stop**: immediately pauses processing.
+- **Skip Current**: immediately skips the active website and continues.
+- **Strict timeout per website**: default `10` seconds; when exceeded, the site is skipped with timeout error.
 
-You can also use the **Exclude emails** box (one rule per line). This list is saved and automatically applied in future runs.
+The popup stores state/results in extension storage, so reopening still shows progress/results.
+Copy uses both plain-text TSV and HTML table formats for better Excel/Sheets cell alignment.
+
+You can use **Exclude emails** rules (saved automatically):
 - `person@example.com` excludes that exact email.
 - `@example.com` excludes all emails from that domain and its subdomains.
 
@@ -34,11 +40,8 @@ You can also use the **Exclude emails** box (one rule per line). This list is sa
 
 1. Click extension icon.
 2. Paste one URL/domain per line.
-3. (Optional) Fill **Exclude emails** with addresses to filter out.
-4. Click **Start**.
-5. Wait for completion, then click **Copy Table** (or use auto-copied output).
-
-
-## Notes
-
-If a site contains the message `Verify your are human by completing the action below` and no emails are found, that site is skipped with error: `Skipped due to robot verification message. Verify first human.`
+3. (Optional) Fill exclusion rules.
+4. Set strict timeout seconds.
+5. Click **Start / Resume**.
+6. Use **Stop** or **Skip Current** when needed.
+7. Click **Copy Table** after/during completion.
