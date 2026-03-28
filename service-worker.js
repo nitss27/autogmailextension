@@ -4,11 +4,16 @@ const TAB_SETTLE_MS = 50;
 const MAX_SECONDARY_PAGES = 3;
 const RUN_STATE_KEY = 'latestRunState';
 
-let runInProgress = false;
-let stopRequested = false;
+let controller = {
+  running: false,
+  stopRequested: false,
+  skipRequested: false,
+  currentTabId: null,
+  runToken: 0
+};
 
 function normalizeUrl(input) {
-  const raw = input.trim();
+  const raw = String(input || '').trim();
   if (!raw) return null;
 
   try {
@@ -102,7 +107,23 @@ async function clearRunState() {
   await chrome.storage.local.remove(RUN_STATE_KEY);
 }
 
-function waitForTabComplete(tabId, timeoutMs = DEFAULT_TAB_LOAD_TIMEOUT_MS) {
+function resolveTimeoutMs(raw) {
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 1000) return DEFAULT_TAB_LOAD_TIMEOUT_MS;
+  return Math.round(value);
+}
+
+function isInterrupted(runToken) {
+  return controller.stopRequested || controller.skipRequested || runToken !== controller.runToken;
+}
+
+function interruptionError(runToken) {
+  if (controller.skipRequested) return '__SKIP__';
+  if (controller.stopRequested || runToken !== controller.runToken) return '__STOP__';
+  return '__STOP__';
+}
+
+function waitForTabComplete(tabId, timeoutMs = DEFAULT_TAB_LOAD_TIMEOUT_MS, runToken) {
   return new Promise((resolve, reject) => {
     let done = false;
 
@@ -110,7 +131,9 @@ function waitForTabComplete(tabId, timeoutMs = DEFAULT_TAB_LOAD_TIMEOUT_MS) {
       if (done) return;
       done = true;
       clearTimeout(timeout);
+      clearInterval(interruptPoll);
       chrome.tabs.onUpdated.removeListener(onUpdated);
+      chrome.tabs.onRemoved.removeListener(onRemoved);
       callback();
     };
 
@@ -122,23 +145,48 @@ function waitForTabComplete(tabId, timeoutMs = DEFAULT_TAB_LOAD_TIMEOUT_MS) {
       }
     };
 
+    const onRemoved = (removedTabId) => {
+      if (removedTabId === tabId) {
+        finish(() => reject(new Error(interruptionError(runToken))));
+      }
+    };
+
+    const interruptPoll = setInterval(() => {
+      if (isInterrupted(runToken)) {
+        finish(() => reject(new Error(interruptionError(runToken))));
+      }
+    }, 60);
+
     chrome.tabs.onUpdated.addListener(onUpdated);
+    chrome.tabs.onRemoved.addListener(onRemoved);
 
     chrome.tabs
       .get(tabId)
       .then((tab) => {
+        if (isInterrupted(runToken)) {
+          finish(() => reject(new Error(interruptionError(runToken))));
+          return;
+        }
         if (tab.status === 'complete') finish(resolve);
       })
       .catch(() => finish(() => reject(new Error('Tab unavailable'))));
   });
 }
 
-async function activateAndWait(tabId, tabLoadTimeoutMs) {
+async function activateAndWait(tabId, tabLoadTimeoutMs, runToken) {
+  if (isInterrupted(runToken)) throw new Error(interruptionError(runToken));
+
   const tab = await chrome.tabs.get(tabId);
+  if (isInterrupted(runToken)) throw new Error(interruptionError(runToken));
+
   await chrome.windows.update(tab.windowId, { focused: true });
+  if (isInterrupted(runToken)) throw new Error(interruptionError(runToken));
+
   await chrome.tabs.update(tabId, { active: true });
-  await waitForTabComplete(tabId, tabLoadTimeoutMs);
+  await waitForTabComplete(tabId, tabLoadTimeoutMs, runToken);
   await sleep(TAB_SETTLE_MS);
+
+  if (isInterrupted(runToken)) throw new Error(interruptionError(runToken));
 }
 
 async function inspectTab(tabId) {
@@ -186,17 +234,26 @@ async function fetchSourcePage(url) {
   };
 }
 
-async function processOneUrl(url, excludeEmails, options) {
-  let tab = null;
-  const tabLoadTimeoutMs = options.tabLoadTimeoutMs;
-
+function buildDomain(url) {
   try {
-    if (stopRequested) {
-      return null;
-    }
+    return new URL(url).hostname;
+  } catch {
+    return url;
+  }
+}
+
+async function processOneUrl(url, excludeEmails, options, runToken) {
+  let tab = null;
+  let strictTimeoutId = null;
+  const domain = buildDomain(url);
+
+  const workPromise = (async () => {
+    if (isInterrupted(runToken)) throw new Error(interruptionError(runToken));
 
     tab = await createTab(url);
-    await activateAndWait(tab.id, tabLoadTimeoutMs);
+    controller.currentTabId = tab.id;
+
+    await activateAndWait(tab.id, options.tabLoadTimeoutMs, runToken);
 
     const firstPass = await inspectTab(tab.id);
     const secondaryQueue = unique(firstPass.secondaryLinks).slice(0, MAX_SECONDARY_PAGES);
@@ -204,17 +261,15 @@ async function processOneUrl(url, excludeEmails, options) {
     let verificationSeen = firstPass.robotVerificationDetected || isRobotVerificationContent(firstPass.text) || isRobotVerificationContent(firstPass.html);
 
     for (const link of secondaryQueue) {
-      if (stopRequested) break;
+      if (isInterrupted(runToken)) throw new Error(interruptionError(runToken));
       await chrome.tabs.update(tab.id, { url: link, active: true });
-      await activateAndWait(tab.id, tabLoadTimeoutMs);
+      await activateAndWait(tab.id, options.tabLoadTimeoutMs, runToken);
       const secondaryPass = await inspectTab(tab.id);
       verificationSeen = verificationSeen || secondaryPass.robotVerificationDetected || isRobotVerificationContent(secondaryPass.text) || isRobotVerificationContent(secondaryPass.html);
       secondaryEmails.push(...secondaryPass.emails);
     }
 
-    if (stopRequested) {
-      return null;
-    }
+    if (isInterrupted(runToken)) throw new Error(interruptionError(runToken));
 
     const sourceMainPromise = fetchSourcePage(url).catch(() => ({ html: '', emails: [], robotVerificationDetected: false }));
     const sourceSecondaryPromise = Promise.all(
@@ -236,160 +291,183 @@ async function processOneUrl(url, excludeEmails, options) {
     ]), excludeEmails);
 
     if (!emails.length && verificationSeen) {
-      throw new Error('Skipped due to robot verification message. Verify first human.');
+      return {
+        url,
+        domain,
+        emails: [],
+        totalEmails: 0,
+        error: 'Skipped due to robot verification message. Verify first human.'
+      };
     }
 
     return {
       url,
-      domain: new URL(url).hostname,
+      domain,
       emails,
       totalEmails: emails.length
     };
-  } catch (error) {
-    return {
-      url,
-      domain: (() => {
-        try {
-          return new URL(url).hostname;
-        } catch {
-          return url;
-        }
-      })(),
-      emails: [],
-      totalEmails: 0,
-      error: error instanceof Error ? error.message : 'Unknown error'
-    };
-  } finally {
-    await closeTab(tab?.id);
-  }
-}
+  })();
 
-function resolveTimeoutMs(raw) {
-  const value = Number(raw);
-  if (!Number.isFinite(value) || value < 1000) return DEFAULT_TAB_LOAD_TIMEOUT_MS;
-  return Math.round(value);
-}
-
-async function runProcessing(urls, requestId, excludeEmails, options, startIndex = 0, initialResults = []) {
-  const results = [...initialResults];
-  runInProgress = true;
-  stopRequested = false;
+  const timeoutPromise = new Promise((resolve) => {
+    strictTimeoutId = setTimeout(() => {
+      resolve({
+        url,
+        domain,
+        emails: [],
+        totalEmails: 0,
+        error: `Skipped due to strict timeout after ${options.strictSkipTimeoutSec} second(s).`
+      });
+    }, options.strictSkipTimeoutSec * 1000);
+  });
 
   try {
-    await setRunState({
-      status: 'running',
-      requestId,
-      total: urls.length,
-      current: startIndex,
-      domain: '',
-      results,
-      urls,
-      nextIndex: startIndex,
-      excludeEmails,
-      tabLoadTimeoutMs: options.tabLoadTimeoutMs
-    });
+    const result = await Promise.race([workPromise, timeoutPromise]);
+    return { status: 'ok', result };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
 
-    for (let i = startIndex; i < urls.length; i += 1) {
-      if (stopRequested) {
-        await setRunState({
-          status: 'paused',
-          requestId,
-          total: urls.length,
-          current: i,
-          domain: '',
-          results,
-          urls,
-          nextIndex: i,
-          excludeEmails,
-          tabLoadTimeoutMs: options.tabLoadTimeoutMs
-        });
-        return results;
-      }
-
-      const url = urls[i];
-      const domain = (() => {
-        try {
-          return new URL(url).hostname;
-        } catch {
-          return url;
-        }
-      })();
-
-      chrome.runtime.sendMessage({
-        type: 'PROCESS_PROGRESS',
-        requestId,
-        current: i + 1,
-        total: urls.length,
-        domain
-      }).catch(() => {
-        // popup may be closed
-      });
-
-      const result = await processOneUrl(url, excludeEmails, options);
-      if (result) {
-        results.push(result);
-
-        chrome.runtime.sendMessage({
-          type: 'PROCESS_RESULT',
-          requestId,
-          index: i,
-          result
-        }).catch(() => {
-          // popup may be closed
-        });
-      }
-
-      await setRunState({
-        status: stopRequested ? 'paused' : 'running',
-        requestId,
-        total: urls.length,
-        current: i + 1,
-        domain,
-        results,
-        urls,
-        nextIndex: i + 1,
-        excludeEmails,
-        tabLoadTimeoutMs: options.tabLoadTimeoutMs
-      });
-
-      if (stopRequested) {
-        return results;
-      }
+    if (message === '__STOP__') return { status: 'stopped' };
+    if (message === '__SKIP__') {
+      return {
+        status: 'ok',
+        result: { url, domain, emails: [], totalEmails: 0, error: 'Skipped by user.' }
+      };
     }
 
-    await setRunState({
-      status: 'done',
-      requestId,
-      total: urls.length,
-      current: urls.length,
-      domain: '',
-      results,
-      urls,
-      nextIndex: urls.length,
-      excludeEmails,
-      tabLoadTimeoutMs: options.tabLoadTimeoutMs
-    });
-
-    return results;
-  } catch (error) {
-    const nextIndex = Math.min(results.length, urls.length);
-    await setRunState({
-      status: 'paused',
-      requestId,
-      total: urls.length,
-      current: nextIndex,
-      domain: '',
-      results,
-      urls,
-      nextIndex,
-      excludeEmails,
-      tabLoadTimeoutMs: options.tabLoadTimeoutMs
-    });
-    throw error;
+    return {
+      status: 'ok',
+      result: { url, domain, emails: [], totalEmails: 0, error: message }
+    };
   } finally {
-    runInProgress = false;
-    stopRequested = false;
+    clearTimeout(strictTimeoutId);
+    await closeTab(tab?.id);
+    if (controller.currentTabId === tab?.id) controller.currentTabId = null;
+    controller.skipRequested = false;
   }
+}
+
+function completedUrlSet(state) {
+  const set = new Set();
+  for (const result of state.results || []) {
+    if (result?.url) set.add(result.url);
+  }
+  return set;
+}
+
+async function runLoop() {
+  const state = await getRunState();
+  if (!state || !Array.isArray(state.urls)) return state;
+
+  controller.running = true;
+  controller.stopRequested = false;
+  const runToken = ++controller.runToken;
+  const doneSet = completedUrlSet(state);
+
+  while (state.current < state.total) {
+    if (controller.stopRequested || runToken !== controller.runToken) {
+      state.status = 'paused';
+      await setRunState(state);
+      controller.running = false;
+      return state;
+    }
+
+    const url = state.urls[state.current];
+
+    if (doneSet.has(url)) {
+      state.current += 1;
+      state.nextIndex = state.current;
+      await setRunState(state);
+      continue;
+    }
+
+    const domain = buildDomain(url);
+
+    state.status = 'running';
+    state.domain = domain;
+    await setRunState(state);
+
+    chrome.runtime.sendMessage({
+      type: 'PROCESS_PROGRESS',
+      requestId: state.requestId,
+      current: state.current + 1,
+      total: state.total,
+      domain
+    }).catch(() => {});
+
+    const outcome = await processOneUrl(url, state.excludeEmails || [], {
+      tabLoadTimeoutMs: resolveTimeoutMs(state.tabLoadTimeoutMs),
+      strictSkipTimeoutSec: Math.max(1, Math.min(300, Number(state.strictSkipTimeoutSec || 10)))
+    }, runToken);
+
+    if (outcome.status === 'stopped') {
+      state.status = 'paused';
+      await setRunState(state);
+      controller.running = false;
+      return state;
+    }
+
+    if (outcome.result) {
+      state.results.push(outcome.result);
+      doneSet.add(url);
+
+      chrome.runtime.sendMessage({
+        type: 'PROCESS_RESULT',
+        requestId: state.requestId,
+        index: state.current,
+        result: outcome.result
+      }).catch(() => {});
+    }
+
+    state.current += 1;
+    state.nextIndex = state.current;
+    await setRunState(state);
+  }
+
+  state.status = 'done';
+  state.domain = '';
+  state.nextIndex = state.total;
+  await setRunState(state);
+  controller.running = false;
+  return state;
+}
+
+async function startOrResume(message) {
+  let state = await getRunState();
+  const incomingUrls = unique((message.urls || []).map(normalizeUrl));
+
+  const canResume = state
+    && Array.isArray(state.urls)
+    && state.status === 'paused'
+    && state.current < state.total;
+
+  if (canResume) {
+    state.status = 'running';
+    state.requestId = message.requestId || state.requestId;
+    if (Array.isArray(message.excludeEmails)) {
+      state.excludeEmails = unique((message.excludeEmails || []).map((email) => String(email).toLowerCase().trim()).filter(Boolean));
+    }
+    state.tabLoadTimeoutMs = resolveTimeoutMs(message.tabLoadTimeoutMs || state.tabLoadTimeoutMs);
+    state.strictSkipTimeoutSec = Math.max(1, Math.min(300, Number(message.strictSkipTimeoutSec || state.strictSkipTimeoutSec || 10)));
+    await setRunState(state);
+  } else {
+    state = {
+      status: 'running',
+      requestId: message.requestId || crypto.randomUUID(),
+      urls: incomingUrls,
+      total: incomingUrls.length,
+      current: 0,
+      nextIndex: 0,
+      domain: '',
+      results: [],
+      excludeEmails: unique((message.excludeEmails || []).map((email) => String(email).toLowerCase().trim()).filter(Boolean)),
+      tabLoadTimeoutMs: resolveTimeoutMs(message.tabLoadTimeoutMs),
+      strictSkipTimeoutSec: Math.max(1, Math.min(300, Number(message.strictSkipTimeoutSec || 10)))
+    };
+    await setRunState(state);
+  }
+
+  const finalState = controller.running ? state : await runLoop();
+  return finalState;
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -401,80 +479,59 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
-  if (message?.type === 'STOP_PROCESSING') {
-    stopRequested = true;
+  if (message?.type === 'STOP_PROCESS' || message?.type === 'STOP_PROCESSING') {
+    controller.stopRequested = true;
+    controller.runToken += 1;
+    closeTab(controller.currentTabId).catch(() => {});
+    (async () => {
+      const state = await getRunState();
+      if (state?.status === 'running') {
+        state.status = 'paused';
+        await setRunState(state);
+      }
+      sendResponse({ ok: true, state: await getRunState() });
+    })();
+    return true;
+  }
+
+  if (message?.type === 'SKIP_CURRENT') {
+    controller.skipRequested = true;
+    closeTab(controller.currentTabId).catch(() => {});
     sendResponse({ ok: true });
     return false;
   }
 
   if (message?.type === 'RESET_RUN_STATE') {
     (async () => {
+      controller.stopRequested = true;
+      controller.runToken += 1;
       await clearRunState();
       sendResponse({ ok: true });
     })();
     return true;
   }
 
-  if (message?.type === 'PROCESS_URLS') {
-    if (runInProgress) {
-      sendResponse({ ok: false, error: 'A run is already in progress.' });
-      return false;
-    }
-
-    const urls = (message.urls || []).map((item) => normalizeUrl(String(item || ''))).filter(Boolean);
-    const requestId = message.requestId || '';
-    const excludeEmails = unique((message.excludeEmails || []).map((email) => String(email).toLowerCase().trim()).filter(Boolean));
-    const options = {
-      tabLoadTimeoutMs: resolveTimeoutMs(message.tabLoadTimeoutMs)
-    };
-
+  if (message?.type === 'START_PROCESS' || message?.type === 'PROCESS_URLS' || message?.type === 'PROCESS_REMAINING') {
     (async () => {
       try {
-        if (message.reset) await clearRunState();
-        const results = await runProcessing(urls, requestId, excludeEmails, options, 0, []);
-        sendResponse({ ok: true, results });
-      } catch (error) {
-        sendResponse({ ok: false, error: error instanceof Error ? error.message : 'Unknown error' });
-      }
-    })();
-
-    return true;
-  }
-
-  if (message?.type === 'PROCESS_REMAINING') {
-    if (runInProgress) {
-      sendResponse({ ok: false, error: 'A run is already in progress.' });
-      return false;
-    }
-
-    (async () => {
-      try {
-        const state = await getRunState();
-        if (!state?.urls?.length) {
-          sendResponse({ ok: false, error: 'No previous list found to continue.' });
-          return;
-        }
-
-        const startIndex = Math.max(0, Math.min(Number(state.nextIndex || state.results?.length || 0), state.urls.length));
-        const baseResults = Array.isArray(state.results) ? state.results.slice(0, startIndex) : [];
-        const excludeEmails = unique((message.excludeEmails || state.excludeEmails || []).map((email) => String(email).toLowerCase().trim()).filter(Boolean));
-        const requestId = message.requestId || '';
-        const options = {
-          tabLoadTimeoutMs: resolveTimeoutMs(message.tabLoadTimeoutMs || state.tabLoadTimeoutMs)
+        const payload = {
+          ...message,
+          type: 'START_PROCESS',
+          strictSkipTimeoutSec: message.strictSkipTimeoutSec || 10,
+          urls: message.urls
         };
 
-        if (startIndex >= state.urls.length) {
-          sendResponse({ ok: true, results: state.results || [] });
-          return;
+        if (message.type === 'PROCESS_REMAINING') {
+          const state = await getRunState();
+          payload.urls = state?.urls || [];
         }
 
-        const results = await runProcessing(state.urls, requestId, excludeEmails, options, startIndex, baseResults);
-        sendResponse({ ok: true, results });
+        const finalState = await startOrResume(payload);
+        sendResponse({ ok: true, state: finalState, results: finalState?.results || [] });
       } catch (error) {
         sendResponse({ ok: false, error: error instanceof Error ? error.message : 'Unknown error' });
       }
     })();
-
     return true;
   }
 
