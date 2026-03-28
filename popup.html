@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bulk Email Extractor</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Bulk Email Extractor</h1>
+      <p>Paste one URL/domain per line and click Start. The extension visits each site tab, then contact/about pages, and closes tabs automatically.</p>
+
+      <label class="fieldLabel" for="websiteInput">Website list</label>
+      <textarea id="websiteInput" placeholder="example.com&#10;https://openai.com"></textarea>
+
+      <label class="fieldLabel" for="excludeInput">Exclude emails/domains (one per line, saved; use @domain.com)</label>
+      <textarea id="excludeInput" class="excludeBox" placeholder="info@example.com&#10;support@example.com"></textarea>
+
+      <label class="fieldLabel" for="timeoutInput">Tab load timeout (ms, optional; saved)</label>
+      <input id="timeoutInput" type="number" min="1000" step="500" placeholder="Default: 15000" class="smallInput" />
+
+      <div class="actions">
+        <button id="processBtn">Start New</button>
+        <button id="continueBtn">Continue Left</button>
+        <button id="stopBtn" class="danger">Stop</button>
+        <button id="clearListBtn" class="secondary">Clear List</button>
+        <button id="copyBtn" disabled>Copy Table</button>
+      </div>
+
+      <div id="status" class="status"></div>
+      <div id="results"></div>
+    </main>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
