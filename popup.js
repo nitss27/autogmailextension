@@ -1,12 +1,15 @@
 const SETTINGS_KEY = 'excludeEmailsList';
-const TIMEOUT_KEY = 'strictTimeoutSec';
+const TAB_TIMEOUT_KEY = 'tabLoadTimeoutMs';
+const STRICT_TIMEOUT_KEY = 'strictSkipTimeoutSec';
 
 const input = document.getElementById('websiteInput');
 const excludeInput = document.getElementById('excludeInput');
-const strictTimeoutInput = document.getElementById('strictTimeoutSec');
-const startBtn = document.getElementById('startBtn');
+const tabLoadTimeoutInput = document.getElementById('tabLoadTimeoutMs');
+const strictSkipTimeoutInput = document.getElementById('strictSkipTimeoutSec');
+const startNewBtn = document.getElementById('startNewBtn');
+const continueBtn = document.getElementById('continueBtn');
 const stopBtn = document.getElementById('stopBtn');
-const skipBtn = document.getElementById('skipBtn');
+const clearBtn = document.getElementById('clearBtn');
 const copyBtn = document.getElementById('copyBtn');
 const statusEl = document.getElementById('status');
 const resultsEl = document.getElementById('results');
@@ -29,10 +32,7 @@ function parseExcludeList(raw) {
 }
 
 function sanitizeCell(value) {
-  return String(value || '')
-    .replace(/\t/g, ' ')
-    .replace(/\r?\n/g, ', ')
-    .trim();
+  return String(value || '').replace(/\t/g, ' ').replace(/\r?\n/g, ', ').trim();
 }
 
 function escapeHtml(value) {
@@ -47,14 +47,16 @@ function escapeHtml(value) {
 async function saveSettings() {
   await chrome.storage.local.set({
     [SETTINGS_KEY]: excludeInput.value,
-    [TIMEOUT_KEY]: strictTimeoutInput.value
+    [TAB_TIMEOUT_KEY]: tabLoadTimeoutInput.value,
+    [STRICT_TIMEOUT_KEY]: strictSkipTimeoutInput.value
   });
 }
 
 async function loadSettings() {
-  const data = await chrome.storage.local.get([SETTINGS_KEY, TIMEOUT_KEY]);
+  const data = await chrome.storage.local.get([SETTINGS_KEY, TAB_TIMEOUT_KEY, STRICT_TIMEOUT_KEY]);
   excludeInput.value = data[SETTINGS_KEY] || '';
-  strictTimeoutInput.value = data[TIMEOUT_KEY] || '10';
+  tabLoadTimeoutInput.value = data[TAB_TIMEOUT_KEY] || '20000';
+  strictSkipTimeoutInput.value = data[STRICT_TIMEOUT_KEY] || '10';
 }
 
 function renderResults(results) {
@@ -66,17 +68,10 @@ function renderResults(results) {
   const rows = results.map((result) => {
     const emails = result.emails?.length ? result.emails.join('<br>') : '<span class="small">No emails found</span>';
     const errorLine = result.error ? `<div class="small">Error: ${escapeHtml(result.error)}</div>` : '';
-
-    return `<tr>
-      <td>${escapeHtml(result.domain)}${errorLine}</td>
-      <td>${emails}</td>
-    </tr>`;
+    return `<tr><td>${escapeHtml(result.domain)}${errorLine}</td><td>${emails}</td></tr>`;
   }).join('');
 
-  resultsEl.innerHTML = `<table>
-    <thead><tr><th>Domain</th><th>Emails</th></tr></thead>
-    <tbody>${rows}</tbody>
-  </table>`;
+  resultsEl.innerHTML = `<table><thead><tr><th>Domain</th><th>Emails</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 function toClipboardTable(results) {
@@ -116,9 +111,9 @@ async function copyResults(results) {
 
 function applyStateToUi(state) {
   const isRunning = state?.status === 'running';
-  startBtn.disabled = isRunning;
+  startNewBtn.disabled = isRunning;
+  continueBtn.disabled = isRunning;
   stopBtn.disabled = !isRunning;
-  skipBtn.disabled = !isRunning;
 
   if (Array.isArray(state?.results)) {
     latestResults = state.results;
@@ -127,7 +122,7 @@ function applyStateToUi(state) {
   }
 
   if (state?.status === 'paused') {
-    setStatus(`Paused at ${state.current} of ${state.total}. Click Start / Resume to continue.`, 'error');
+    setStatus(`Paused at ${state.current} of ${state.total}. Click Continue Left to resume.`, 'error');
   } else if (state?.status === 'done') {
     setStatus(`Done. Processed ${state.total} website(s).`, 'success');
   } else if (isRunning) {
@@ -147,48 +142,49 @@ async function loadLatestState() {
 chrome.runtime.onMessage.addListener((message) => {
   if (message?.type !== 'PROCESS_PROGRESS') return;
   if (!activeRequestId || message.requestId !== activeRequestId) return;
-
   const suffix = message.note ? ` — ${message.note}` : '';
   setStatus(`Processing ${message.current} of ${message.total}: ${message.domain}${suffix}`);
 });
 
-async function startOrResume() {
+async function runStart(mode) {
   const urls = input.value.split('\n').map((value) => value.trim()).filter(Boolean);
   const excludeEmails = parseExcludeList(excludeInput.value);
-  const strictTimeoutSec = Math.max(1, Math.min(120, Number(strictTimeoutInput.value) || 10));
-  strictTimeoutInput.value = String(strictTimeoutSec);
+  const tabLoadTimeoutMs = Math.max(1000, Math.min(120000, Number(tabLoadTimeoutInput.value) || 20000));
+  const strictSkipTimeoutSec = Math.max(1, Math.min(300, Number(strictSkipTimeoutInput.value) || 10));
+  tabLoadTimeoutInput.value = String(tabLoadTimeoutMs);
+  strictSkipTimeoutInput.value = String(strictSkipTimeoutSec);
 
   await saveSettings();
   activeRequestId = crypto.randomUUID();
 
-  startBtn.disabled = true;
+  startNewBtn.disabled = true;
+  continueBtn.disabled = true;
   stopBtn.disabled = false;
-  skipBtn.disabled = false;
   copyBtn.disabled = true;
 
   try {
     const response = await chrome.runtime.sendMessage({
       type: 'START_OR_RESUME',
+      mode,
       requestId: activeRequestId,
       urls,
       excludeEmails,
-      strictTimeoutSec
+      tabLoadTimeoutMs,
+      strictSkipTimeoutSec
     });
 
     if (!response?.ok) throw new Error('Unexpected extension response.');
-
-    const state = response.state || null;
-    if (state) {
-      applyStateToUi(state);
-      if (state.status === 'done' && latestResults.length) {
+    if (response.state) {
+      applyStateToUi(response.state);
+      if (response.state.status === 'done' && latestResults.length) {
         await copyResults(latestResults);
       }
     }
   } catch (error) {
     setStatus(`Failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
-    startBtn.disabled = false;
+    startNewBtn.disabled = false;
+    continueBtn.disabled = false;
     stopBtn.disabled = true;
-    skipBtn.disabled = true;
   }
 }
 
@@ -197,27 +193,24 @@ async function stopProcess() {
   await loadLatestState();
 }
 
-async function skipCurrent() {
-  await chrome.runtime.sendMessage({ type: 'SKIP_CURRENT' });
+function clearList() {
+  input.value = '';
+  setStatus('Website list cleared.');
 }
 
-startBtn.addEventListener('click', () => {
-  startOrResume().catch(() => {
-    setStatus('Failed to start/resume process.', 'error');
-  });
+startNewBtn.addEventListener('click', () => {
+  runStart('new').catch(() => setStatus('Failed to start new run.', 'error'));
+});
+
+continueBtn.addEventListener('click', () => {
+  runStart('continue').catch(() => setStatus('Failed to continue run.', 'error'));
 });
 
 stopBtn.addEventListener('click', () => {
-  stopProcess().catch(() => {
-    setStatus('Failed to stop process.', 'error');
-  });
+  stopProcess().catch(() => setStatus('Failed to stop process.', 'error'));
 });
 
-skipBtn.addEventListener('click', () => {
-  skipCurrent().catch(() => {
-    setStatus('Failed to skip current website.', 'error');
-  });
-});
+clearBtn.addEventListener('click', clearList);
 
 copyBtn.addEventListener('click', async () => {
   if (!latestResults.length) {
@@ -233,17 +226,9 @@ copyBtn.addEventListener('click', async () => {
   }
 });
 
-excludeInput.addEventListener('blur', () => {
-  saveSettings().catch(() => {
-    // ignore settings save errors
-  });
-});
-
-strictTimeoutInput.addEventListener('blur', () => {
-  saveSettings().catch(() => {
-    // ignore settings save errors
-  });
-});
+excludeInput.addEventListener('blur', () => saveSettings().catch(() => {}));
+tabLoadTimeoutInput.addEventListener('blur', () => saveSettings().catch(() => {}));
+strictSkipTimeoutInput.addEventListener('blur', () => saveSettings().catch(() => {}));
 
 Promise.all([loadSettings(), loadLatestState()]).catch(() => {
   // ignore bootstrap errors

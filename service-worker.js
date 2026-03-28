@@ -122,11 +122,11 @@ function waitForTabComplete(tabId, timeoutMs = TAB_LOAD_TIMEOUT_MS) {
   });
 }
 
-async function activateAndWait(tabId) {
+async function activateAndWait(tabId, tabLoadTimeoutMs = TAB_LOAD_TIMEOUT_MS) {
   const tab = await chrome.tabs.get(tabId);
   await chrome.windows.update(tab.windowId, { focused: true });
   await chrome.tabs.update(tabId, { active: true });
-  await waitForTabComplete(tabId);
+  await waitForTabComplete(tabId, tabLoadTimeoutMs);
   await sleep(TAB_SETTLE_MS);
 }
 
@@ -171,7 +171,7 @@ function buildDomain(url) {
   }
 }
 
-async function processOneUrl(url, excludeEmails, strictTimeoutMs) {
+async function processOneUrl(url, excludeEmails, strictTimeoutMs, tabLoadTimeoutMs) {
   const domain = buildDomain(url);
   let tab = null;
   let timeoutId = null;
@@ -180,7 +180,7 @@ async function processOneUrl(url, excludeEmails, strictTimeoutMs) {
     tab = await createTab(url);
     controller.currentTabId = tab.id;
 
-    await activateAndWait(tab.id);
+    await activateAndWait(tab.id, tabLoadTimeoutMs);
     if (controller.stopRequested) throw new Error('__STOP__');
     if (controller.skipRequested) throw new Error('__SKIP__');
 
@@ -193,7 +193,7 @@ async function processOneUrl(url, excludeEmails, strictTimeoutMs) {
       if (controller.skipRequested) throw new Error('__SKIP__');
 
       await chrome.tabs.update(tab.id, { url: link, active: true });
-      await activateAndWait(tab.id);
+      await activateAndWait(tab.id, tabLoadTimeoutMs);
       const secondaryPass = await inspectTab(tab.id);
       secondaryEmails.push(...secondaryPass.emails);
     }
@@ -302,7 +302,8 @@ async function runLoop() {
     const outcome = await processOneUrl(
       url,
       state.excludeEmails || [],
-      Math.max(1000, Number(state.strictTimeoutSec || 10) * 1000)
+      Math.max(1000, Number(state.strictSkipTimeoutSec || 10) * 1000),
+      Math.max(1000, Number(state.tabLoadTimeoutMs || TAB_LOAD_TIMEOUT_MS))
     );
 
     if (outcome.status === 'stopped') {
@@ -357,8 +358,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   (async () => {
     let state = await getRunState();
+    const mode = message.mode === 'continue' ? 'continue' : 'new';
 
-    if (!state || state.status === 'done' || state.status === 'idle') {
+    if (mode === 'new' || !state || state.status === 'done' || state.status === 'idle') {
       const urls = unique((message.urls || []).map(normalizeUrl));
       state = {
         status: 'running',
@@ -369,12 +371,19 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         domain: '',
         results: [],
         excludeEmails: unique((message.excludeEmails || []).map((email) => String(email).toLowerCase().trim()).filter(Boolean)),
-        strictTimeoutSec: Math.max(1, Math.min(120, Number(message.strictTimeoutSec) || 10))
+        tabLoadTimeoutMs: Math.max(1000, Math.min(120000, Number(message.tabLoadTimeoutMs) || 20000)),
+        strictSkipTimeoutSec: Math.max(1, Math.min(300, Number(message.strictSkipTimeoutSec) || 10))
       };
       await setRunState(state);
     } else if (state.status === 'paused') {
       state.status = 'running';
       state.requestId = message.requestId || state.requestId;
+      if (Number(message.tabLoadTimeoutMs)) {
+        state.tabLoadTimeoutMs = Math.max(1000, Math.min(120000, Number(message.tabLoadTimeoutMs)));
+      }
+      if (Number(message.strictSkipTimeoutSec)) {
+        state.strictSkipTimeoutSec = Math.max(1, Math.min(300, Number(message.strictSkipTimeoutSec)));
+      }
       await setRunState(state);
     }
 
