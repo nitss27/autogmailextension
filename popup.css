@@ -5,8 +5,8 @@
 
 body {
   margin: 0;
-  min-width: 480px;
-  max-width: 480px;
+  min-width: 520px;
+  max-width: 520px;
   padding: 16px;
   background: #f8f9fc;
   color: #1f2937;
@@ -45,8 +45,13 @@ textarea {
   resize: vertical;
 }
 
+.excludeBox {
+  height: 80px;
+}
+
 .actions {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
   gap: 8px;
   margin: 12px 0;
 }
@@ -54,13 +59,23 @@ textarea {
 button {
   border: none;
   border-radius: 8px;
-  padding: 8px 12px;
+  padding: 8px 10px;
   font-weight: 600;
   cursor: pointer;
 }
 
-#processBtn {
+#startBtn {
   background: #2563eb;
+  color: white;
+}
+
+#stopBtn {
+  background: #b91c1c;
+  color: white;
+}
+
+#skipBtn {
+  background: #b45309;
   color: white;
 }
 
@@ -88,8 +103,13 @@ button:disabled {
   color: #166534;
 }
 
+#results {
+  overflow-x: auto;
+}
+
 table {
   width: 100%;
+  min-width: 450px;
   border-collapse: collapse;
   background: white;
   border-radius: 8px;
@@ -117,18 +137,4 @@ tr:last-child td {
 .small {
   color: #6b7280;
   font-size: 11px;
-}
-
-
-#results {
-  overflow-x: auto;
-}
-
-table {
-  min-width: 900px;
-}
-
-
-.excludeBox {
-  height: 80px;
 }
