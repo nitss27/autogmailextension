@@ -23,9 +23,10 @@ For each URL (one-by-one):
 - **Stop**: immediately pauses processing.
 - **Skip Current**: immediately skips the active website and continues.
 - **Clear List**: clears the website input box.
-- **Copy Table**: copies TSV/HTML table for Excel/Sheets.
+- **Copy Table**: copies exactly 2 columns (`Domain`, `Emails`) with emails comma-separated.
 
 The popup stores state/results in extension storage, so reopening still shows progress/results.
+Live results keep updating while the run is active, and previously collected rows remain visible after popup reopen.
 Copy uses both plain-text TSV and HTML table formats for better Excel/Sheets cell alignment.
 
 You can use **Exclude emails** rules (saved automatically):

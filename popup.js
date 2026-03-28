@@ -75,11 +75,10 @@ function renderResults(results) {
 }
 
 function toClipboardTable(results) {
-  const headers = ['Domain', 'Emails', 'Error'];
+  const headers = ['Domain', 'Emails'];
   const rows = results.map((result) => [
     sanitizeCell(result.domain),
-    sanitizeCell((result.emails || []).join(', ')),
-    sanitizeCell(result.error || '')
+    sanitizeCell((result.emails || []).join(', '))
   ]);
   return [headers, ...rows].map((row) => row.join('\t')).join('\n');
 }
@@ -87,9 +86,9 @@ function toClipboardTable(results) {
 function toClipboardHtmlTable(results) {
   const rows = results.map((result) => {
     const emails = (result.emails || []).map((email) => escapeHtml(email)).join('<br>');
-    return `<tr><td>${escapeHtml(result.domain)}</td><td>${emails || ''}</td><td>${escapeHtml(result.error || '')}</td></tr>`;
+    return `<tr><td>${escapeHtml(result.domain)}</td><td>${emails || ''}</td></tr>`;
   }).join('');
-  return `<table><thead><tr><th>Domain</th><th>Emails</th><th>Error</th></tr></thead><tbody>${rows}</tbody></table>`;
+  return `<table><thead><tr><th>Domain</th><th>Emails</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 async function copyResults(results) {
@@ -107,6 +106,29 @@ async function copyResults(results) {
   }
 
   await navigator.clipboard.writeText(plainText);
+}
+
+
+function startLiveStatePolling() {
+  let active = true;
+
+  const tick = async () => {
+    if (!active) return;
+    try {
+      await loadLatestState();
+      const response = await chrome.runtime.sendMessage({ type: 'GET_LATEST_RESULTS' });
+      if (response?.ok && response.state?.status !== 'running') {
+        active = false;
+        return;
+      }
+    } catch {
+      // ignore polling failures
+    }
+
+    setTimeout(tick, 1000);
+  };
+
+  tick();
 }
 
 function applyStateToUi(state) {
@@ -161,6 +183,7 @@ async function runStart(mode) {
   continueBtn.disabled = true;
   stopBtn.disabled = false;
   copyBtn.disabled = true;
+  startLiveStatePolling();
 
   try {
     const response = await chrome.runtime.sendMessage({
