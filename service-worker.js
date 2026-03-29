@@ -1,7 +1,7 @@
 const EMAIL_REGEX = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
 const DEFAULT_TAB_LOAD_TIMEOUT_MS = 15000;
 const TAB_SETTLE_MS = 50;
-const MAX_SECONDARY_PAGES = 3;
+const MAX_SECONDARY_PAGES = 5;
 const RUN_STATE_KEY = 'latestRunState';
 
 let controller = {
@@ -32,7 +32,24 @@ function unique(items) {
 }
 
 function extractEmailsFromText(text) {
-  return unique((text.match(EMAIL_REGEX) || []).map((email) => email.toLowerCase()));
+  return unique((String(text || '').match(EMAIL_REGEX) || []).map((email) => email.toLowerCase()));
+}
+
+function decodeCloudflareEmail(hexString) {
+  const value = String(hexString || '').trim();
+  if (!value || value.length < 4 || value.length % 2 !== 0) return '';
+
+  try {
+    const key = parseInt(value.slice(0, 2), 16);
+    let decoded = '';
+    for (let i = 2; i < value.length; i += 2) {
+      const byte = parseInt(value.slice(i, i + 2), 16);
+      decoded += String.fromCharCode(byte ^ key);
+    }
+    return decoded;
+  } catch {
+    return '';
+  }
 }
 
 function filterExcludedEmails(emails, excludeEmails) {
@@ -180,13 +197,9 @@ async function activateAndWait(tabId, tabLoadTimeoutMs, runToken) {
   if (isInterrupted(runToken)) throw new Error(interruptionError(runToken));
 
   await chrome.windows.update(tab.windowId, { focused: true });
-  if (isInterrupted(runToken)) throw new Error(interruptionError(runToken));
-
   await chrome.tabs.update(tabId, { active: true });
   await waitForTabComplete(tabId, tabLoadTimeoutMs, runToken);
   await sleep(TAB_SETTLE_MS);
-
-  if (isInterrupted(runToken)) throw new Error(interruptionError(runToken));
 }
 
 async function inspectTab(tabId) {
@@ -196,15 +209,51 @@ async function inspectTab(tabId) {
       const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
       const html = document.documentElement?.innerHTML || '';
       const text = document.body?.innerText || '';
+
+      const mailtoEmails = [...document.querySelectorAll('a[href^="mailto:"]')]
+        .map((a) => (a.getAttribute('href') || '').replace(/^mailto:/i, '').split('?')[0]);
+
+      const dataAttrEmails = [...document.querySelectorAll('[data-email], [data-mail], [data-contact]')]
+        .flatMap((node) => [
+          node.getAttribute('data-email') || '',
+          node.getAttribute('data-mail') || '',
+          node.getAttribute('data-contact') || ''
+        ]);
+
+      const cloudflareEmails = [...document.querySelectorAll('[data-cfemail]')]
+        .map((el) => {
+          const value = String(el.getAttribute('data-cfemail') || '').trim();
+          if (!value || value.length < 4 || value.length % 2 !== 0) return '';
+          try {
+            const key = parseInt(value.slice(0, 2), 16);
+            let decoded = '';
+            for (let i = 2; i < value.length; i += 2) {
+              const byte = parseInt(value.slice(i, i + 2), 16);
+              decoded += String.fromCharCode(byte ^ key);
+            }
+            return decoded;
+          } catch {
+            return '';
+          }
+        });
+
+      const scriptText = [...document.querySelectorAll('script[type="application/ld+json"], script:not([src])')]
+        .map((script) => script.textContent || '')
+        .join('\n');
+
       const emails = [
         ...(html.match(emailRegex) || []),
-        ...[...document.querySelectorAll('a[href^="mailto:"]')]
-          .map((a) => (a.getAttribute('href') || '').replace(/^mailto:/i, '').split('?')[0])
+        ...(text.match(emailRegex) || []),
+        ...(scriptText.match(emailRegex) || []),
+        ...mailtoEmails,
+        ...dataAttrEmails,
+        ...cloudflareEmails
       ];
 
+      const secondaryPattern = /(contact|about|support|team|impressum|legal|company|get[-_]?in[-_]?touch)/i;
       const secondaryLinks = [...document.querySelectorAll('a[href]')]
         .map((a) => a.href)
-        .filter((href) => href && /(contact|about)/i.test(href));
+        .filter((href) => href && secondaryPattern.test(href));
 
       const normalizedCombined = `${text}\n${html}`.toLowerCase();
       const robotVerificationDetected = normalizedCombined.includes('verify your are human by completing the action below');
@@ -213,7 +262,7 @@ async function inspectTab(tabId) {
         pageUrl: location.href,
         html,
         text,
-        emails: [...new Set(emails.map((email) => email.trim().toLowerCase()).filter(Boolean))],
+        emails: [...new Set(emails.map((email) => String(email).trim().toLowerCase()).filter(Boolean))],
         secondaryLinks: [...new Set(secondaryLinks)],
         robotVerificationDetected
       };
@@ -227,30 +276,51 @@ async function fetchSourcePage(url) {
   const response = await fetch(url, { method: 'GET', redirect: 'follow', credentials: 'omit' });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const html = await response.text();
+
+  const cloudflareMatches = [...html.matchAll(/data-cfemail=["']([a-fA-F0-9]+)["']/g)]
+    .map((match) => decodeCloudflareEmail(match[1]));
+
   return {
     html,
-    emails: extractEmailsFromText(html),
+    emails: unique([...extractEmailsFromText(html), ...cloudflareMatches].map((item) => String(item || '').toLowerCase())),
     robotVerificationDetected: isRobotVerificationContent(html)
   };
 }
 
-function buildDomain(url) {
+function buildDomain(urlOrInput) {
   try {
-    return new URL(url).hostname;
+    return new URL(urlOrInput).hostname;
   } catch {
-    return url;
+    return String(urlOrInput || '');
   }
 }
 
-async function processOneUrl(url, excludeEmails, options, runToken) {
+async function processOneEntry(entry, excludeEmails, options, runToken) {
+  const rawInput = String(entry?.raw || '').trim();
+  const normalizedUrl = normalizeUrl(rawInput);
+
+  if (!normalizedUrl) {
+    return {
+      status: 'ok',
+      result: {
+        raw: rawInput,
+        url: '',
+        domain: rawInput,
+        emails: [],
+        totalEmails: 0,
+        error: 'Invalid URL format.'
+      }
+    };
+  }
+
   let tab = null;
   let strictTimeoutId = null;
-  const domain = buildDomain(url);
+  const domain = buildDomain(normalizedUrl);
 
   const workPromise = (async () => {
     if (isInterrupted(runToken)) throw new Error(interruptionError(runToken));
 
-    tab = await createTab(url);
+    tab = await createTab(normalizedUrl);
     controller.currentTabId = tab.id;
 
     await activateAndWait(tab.id, options.tabLoadTimeoutMs, runToken);
@@ -269,9 +339,7 @@ async function processOneUrl(url, excludeEmails, options, runToken) {
       secondaryEmails.push(...secondaryPass.emails);
     }
 
-    if (isInterrupted(runToken)) throw new Error(interruptionError(runToken));
-
-    const sourceMainPromise = fetchSourcePage(url).catch(() => ({ html: '', emails: [], robotVerificationDetected: false }));
+    const sourceMainPromise = fetchSourcePage(normalizedUrl).catch(() => ({ html: '', emails: [], robotVerificationDetected: false }));
     const sourceSecondaryPromise = Promise.all(
       secondaryQueue.map((link) => fetchSourcePage(link).catch(() => ({ html: '', emails: [], robotVerificationDetected: false })))
     );
@@ -292,7 +360,8 @@ async function processOneUrl(url, excludeEmails, options, runToken) {
 
     if (!emails.length && verificationSeen) {
       return {
-        url,
+        raw: rawInput,
+        url: normalizedUrl,
         domain,
         emails: [],
         totalEmails: 0,
@@ -301,7 +370,8 @@ async function processOneUrl(url, excludeEmails, options, runToken) {
     }
 
     return {
-      url,
+      raw: rawInput,
+      url: normalizedUrl,
       domain,
       emails,
       totalEmails: emails.length
@@ -311,7 +381,8 @@ async function processOneUrl(url, excludeEmails, options, runToken) {
   const timeoutPromise = new Promise((resolve) => {
     strictTimeoutId = setTimeout(() => {
       resolve({
-        url,
+        raw: rawInput,
+        url: normalizedUrl,
         domain,
         emails: [],
         totalEmails: 0,
@@ -330,13 +401,13 @@ async function processOneUrl(url, excludeEmails, options, runToken) {
     if (message === '__SKIP__') {
       return {
         status: 'ok',
-        result: { url, domain, emails: [], totalEmails: 0, error: 'Skipped by user.' }
+        result: { raw: rawInput, url: normalizedUrl, domain, emails: [], totalEmails: 0, error: 'Skipped by user.' }
       };
     }
 
     return {
       status: 'ok',
-      result: { url, domain, emails: [], totalEmails: 0, error: message }
+      result: { raw: rawInput, url: normalizedUrl, domain, emails: [], totalEmails: 0, error: message }
     };
   } finally {
     clearTimeout(strictTimeoutId);
@@ -346,22 +417,13 @@ async function processOneUrl(url, excludeEmails, options, runToken) {
   }
 }
 
-function completedUrlSet(state) {
-  const set = new Set();
-  for (const result of state.results || []) {
-    if (result?.url) set.add(result.url);
-  }
-  return set;
-}
-
 async function runLoop() {
   const state = await getRunState();
-  if (!state || !Array.isArray(state.urls)) return state;
+  if (!state || !Array.isArray(state.entries)) return state;
 
   controller.running = true;
   controller.stopRequested = false;
   const runToken = ++controller.runToken;
-  const doneSet = completedUrlSet(state);
 
   while (state.current < state.total) {
     if (controller.stopRequested || runToken !== controller.runToken) {
@@ -371,19 +433,11 @@ async function runLoop() {
       return state;
     }
 
-    const url = state.urls[state.current];
-
-    if (doneSet.has(url)) {
-      state.current += 1;
-      state.nextIndex = state.current;
-      await setRunState(state);
-      continue;
-    }
-
-    const domain = buildDomain(url);
+    const entry = state.entries[state.current];
+    const displayDomain = buildDomain(entry?.raw || '');
 
     state.status = 'running';
-    state.domain = domain;
+    state.domain = displayDomain;
     await setRunState(state);
 
     chrome.runtime.sendMessage({
@@ -391,10 +445,10 @@ async function runLoop() {
       requestId: state.requestId,
       current: state.current + 1,
       total: state.total,
-      domain
+      domain: displayDomain
     }).catch(() => {});
 
-    const outcome = await processOneUrl(url, state.excludeEmails || [], {
+    const outcome = await processOneEntry(entry, state.excludeEmails || [], {
       tabLoadTimeoutMs: resolveTimeoutMs(state.tabLoadTimeoutMs),
       strictSkipTimeoutSec: Math.max(1, Math.min(300, Number(state.strictSkipTimeoutSec || 10)))
     }, runToken);
@@ -408,8 +462,6 @@ async function runLoop() {
 
     if (outcome.result) {
       state.results.push(outcome.result);
-      doneSet.add(url);
-
       chrome.runtime.sendMessage({
         type: 'PROCESS_RESULT',
         requestId: state.requestId,
@@ -433,10 +485,15 @@ async function runLoop() {
 
 async function startOrResume(message) {
   let state = await getRunState();
-  const incomingUrls = unique((message.urls || []).map(normalizeUrl));
+
+  const rawEntries = (message.urls || [])
+    .map((item) => String(item || ''))
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((raw) => ({ raw }));
 
   const canResume = state
-    && Array.isArray(state.urls)
+    && Array.isArray(state.entries)
     && state.status === 'paused'
     && state.current < state.total;
 
@@ -453,8 +510,9 @@ async function startOrResume(message) {
     state = {
       status: 'running',
       requestId: message.requestId || crypto.randomUUID(),
-      urls: incomingUrls,
-      total: incomingUrls.length,
+      entries: rawEntries,
+      urls: rawEntries.map((item) => item.raw),
+      total: rawEntries.length,
       current: 0,
       nextIndex: 0,
       domain: '',
@@ -466,16 +524,12 @@ async function startOrResume(message) {
     await setRunState(state);
   }
 
-  const finalState = controller.running ? state : await runLoop();
-  return finalState;
+  return controller.running ? state : runLoop();
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === 'GET_LATEST_RESULTS') {
-    (async () => {
-      const state = await getRunState();
-      sendResponse({ ok: true, state });
-    })();
+    (async () => sendResponse({ ok: true, state: await getRunState() }))();
     return true;
   }
 
@@ -516,18 +570,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       try {
         const payload = {
           ...message,
-          type: 'START_PROCESS',
-          strictSkipTimeoutSec: message.strictSkipTimeoutSec || 10,
-          urls: message.urls
+          urls: message.type === 'PROCESS_REMAINING' ? ((await getRunState())?.urls || []) : (message.urls || []),
+          strictSkipTimeoutSec: message.strictSkipTimeoutSec || 10
         };
-
-        if (message.type === 'PROCESS_REMAINING') {
-          const state = await getRunState();
-          payload.urls = state?.urls || [];
-        }
-
-        const finalState = await startOrResume(payload);
-        sendResponse({ ok: true, state: finalState, results: finalState?.results || [] });
+        const state = await startOrResume(payload);
+        sendResponse({ ok: true, state, results: state?.results || [] });
       } catch (error) {
         sendResponse({ ok: false, error: error instanceof Error ? error.message : 'Unknown error' });
       }
