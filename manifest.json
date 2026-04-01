@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Bulk Email Harvester",
+  "version": "1.0.0",
+  "description": "Bulk extract emails from multiple domains with robust crawling, validation, and export.",
+  "permissions": ["storage", "clipboardWrite", "tabs", "scripting"],
+  "host_permissions": ["<all_urls>"],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  }
+}
