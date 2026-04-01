@@ -13,10 +13,7 @@
     <main class="app">
       <header class="app-header">
         <h1>Bulk Email Harvester</h1>
-        <div id="statusBar" class="status idle">
-          <span class="dot"></span>
-          <span id="statusText">Idle</span>
-        </div>
+        <div id="statusBar" class="status idle"><span class="dot"></span><span id="statusText">Idle</span></div>
       </header>
 
       <section class="panel">
@@ -30,18 +27,9 @@
       </section>
 
       <section class="panel settings-grid">
-        <label>
-          Tab Timeout (ms)
-          <input id="tabLoadTimeoutMs" type="number" min="2000" step="500" value="12000" />
-        </label>
-        <label>
-          Force Skip After (ms)
-          <input id="forceSkipTimeoutMs" type="number" min="0" step="500" value="0" />
-        </label>
-        <label>
-          Hard Max Per Site (ms)
-          <input id="hardUrlTimeoutMs" type="number" min="5000" step="1000" value="45000" />
-        </label>
+        <label>Tab Timeout (ms)<input id="tabLoadTimeoutMs" type="number" min="2000" step="500" value="12000" /></label>
+        <label>Force Skip After (ms)<input id="forceSkipTimeoutMs" type="number" min="0" step="500" value="0" /></label>
+        <label>Hard Max Per Site (ms)<input id="hardUrlTimeoutMs" type="number" min="5000" step="1000" value="15000" /></label>
       </section>
 
       <section class="buttons row">
@@ -49,45 +37,28 @@
         <button id="continueBtn" class="btn secondary">⟳ Continue</button>
         <button id="copyTableBtn" class="btn teal" disabled>⎘ Copy Table</button>
       </section>
-
       <section class="buttons row">
         <button id="stopBtn" class="btn warning">⏸ Stop</button>
         <button id="forceStopBtn" class="btn danger">⏹ Force Stop</button>
-        <button id="clearBtn" class="btn ghost">✕ Clear List</button>
+        <button id="skipBtn" class="btn amber">⏭ Skip Current</button>
       </section>
-
-      <section class="buttons row compact-row">
-        <button id="copyEmailsBtn" class="btn teal small" disabled>Copy Emails Only</button>
+      <section class="buttons row">
+        <button id="clearBtn" class="btn ghost">✕ Clear List</button>
+        <button id="copyEmailsBtn" class="btn teal" disabled>Copy Emails Only</button>
       </section>
 
       <section class="panel">
         <div id="summary" class="summary">No run yet.</div>
         <div class="results-wrapper">
           <table>
-            <thead>
-              <tr>
-                <th>Domain</th>
-                <th>Emails Found</th>
-              </tr>
-            </thead>
+            <thead><tr><th>Domain</th><th>Emails Found</th></tr></thead>
             <tbody id="resultsBody"></tbody>
           </table>
         </div>
       </section>
     </main>
 
-    <template id="rowTemplate">
-      <tr>
-        <td>
-          <div class="domain"></div>
-          <div class="error"></div>
-        </td>
-        <td>
-          <div class="emails"></div>
-        </td>
-      </tr>
-    </template>
-
+    <template id="rowTemplate"><tr><td><div class="domain"></div><div class="error"></div></td><td><div class="emails"></div></td></tr></template>
     <script src="popup.js"></script>
   </body>
 </html>
