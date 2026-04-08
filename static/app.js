@@ -17,7 +17,9 @@ function render(state){
     if(!r) return;
     const tr = document.createElement('tr');
     const ehtml = (r.emails||[]).map(e=>`<div class='email'>${e.email}<span class='badge ${e.confidence}'>${e.confidence}</span></div>`).join('') || '<i>No emails found</i>';
-    tr.innerHTML = `<td><div>${r.domain||''}</div><div class='error'>[${r.status||''}] ${r.error||''}</div></td><td>${ehtml}</td>`;
+    const status = r.status ? `[${r.status}]` : '';
+    const err = r.error ? ` ${r.error}` : '';
+    tr.innerHTML = `<td><div>${r.domain||''}</div><div class='error'>${status}${err}</div></td><td>${ehtml}</td>`;
     rowsEl.appendChild(tr);
   });
 }
@@ -31,7 +33,7 @@ $('start').onclick = async () => {
     excludeRaw: $('exclude').value,
     tabLoadTimeoutMs: Number($('tabTimeout').value||12000),
     forceSkipAfterMs: Number($('forceSkip').value||0),
-    hardUrlTimeoutMs: Number($('hardTimeout').value||15000)
+    hardUrlTimeoutMs: Number($('hardTimeout').value||45000)
   });
   refresh();
 };

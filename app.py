@@ -14,6 +14,10 @@ from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 from flask import Flask, jsonify, render_template, request
+try:
+    from playwright.sync_api import sync_playwright
+except Exception:  # optional dependency at runtime
+    sync_playwright = None
 
 app = Flask(__name__)
 STATE_PATH = Path("run_state.json")
@@ -39,12 +43,16 @@ def default_state():
         "excludeEmails": [],
         "tabLoadTimeoutMs": 12000,
         "forceSkipAfterMs": None,
-        "hardUrlTimeoutMs": 15000,
+        "hardUrlTimeoutMs": 45000,
         "stopRequested": False,
         "forceStopRequested": False,
         "skipRequested": False,
         "summary": ""
     }
+
+
+def should_skip():
+    return bool(state.get("skipRequested") or state.get("forceStopRequested"))
 
 
 def load_state():
@@ -214,13 +222,51 @@ def discover_secondary(base_url: str, soup: BeautifulSoup) -> List[str]:
     return out
 
 
-def fetch_url(url: str, timeout_sec=10) -> str:
+def fetch_url(url: str, timeout_sec=20) -> str:
     headers = {
         "User-Agent": "Mozilla/5.0",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     }
-    r = requests.get(url, timeout=timeout_sec, headers=headers, allow_redirects=True)
-    return r.text
+    last_error = None
+    for candidate in [url, url.replace("https://", "http://", 1) if url.startswith("https://") else url]:
+        try:
+            r = requests.get(candidate, timeout=timeout_sec, headers=headers, allow_redirects=True)
+            if r.text:
+                return r.text
+        except Exception as ex:
+            last_error = ex
+    if last_error:
+        raise last_error
+    return ""
+
+
+def fetch_dynamic_html(url: str, wait_ms: int) -> str:
+    """Use a real browser in non-headless mode whenever Playwright is available."""
+    if sync_playwright is None:
+        return ""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=False)
+        page = browser.new_page()
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=max(10000, wait_ms))
+            page.wait_for_timeout(3500)
+            # cookie overlays
+            for label in ["Accept", "Agree", "Allow", "Accept all", "I agree"]:
+                try:
+                    page.get_by_role("button", name=re.compile(label, re.I)).first.click(timeout=500)
+                except Exception:
+                    pass
+            try:
+                page.wait_for_function(
+                    "() => (document.body && document.body.innerText.trim().length > 200) || "
+                    "document.querySelectorAll('form,button,input,textarea,select').length > 0",
+                    timeout=max(5000, wait_ms),
+                )
+            except Exception:
+                pass
+            return page.content()
+        finally:
+            browser.close()
 
 
 def scrape_html(url: str, html: str, out_hits: List[EmailHit]):
@@ -255,25 +301,37 @@ def scrape_html(url: str, html: str, out_hits: List[EmailHit]):
 
 def process_single_url(url: str, cfg: dict) -> dict:
     started = time.time()
-    hard_timeout = max(10, int((cfg.get("hardUrlTimeoutMs") or 15000) / 1000))
+    hard_timeout = max(15, int((cfg.get("hardUrlTimeoutMs") or 45000) / 1000))
 
     def work():
         hits: List[EmailHit] = []
-        html = fetch_url(url, timeout_sec=10)
-        soup = scrape_html(url, html, hits)
+        raw_html = fetch_url(url, timeout_sec=20)
+        soup = scrape_html(url, raw_html, hits)
+
+        dynamic_html = fetch_dynamic_html(url, cfg.get("tabLoadTimeoutMs") or 12000)
+        if dynamic_html:
+            soup = scrape_html(url, dynamic_html, hits)
 
         for sec_url in discover_secondary(url, soup):
             if state.get("skipRequested") or state.get("forceStopRequested"):
                 break
+            if should_skip():
+                break
             try:
-                sec_html = fetch_url(sec_url, timeout_sec=8)
+                sec_html = fetch_url(sec_url, timeout_sec=15)
                 scrape_html(sec_url, sec_html, hits)
+                sec_dynamic = fetch_dynamic_html(sec_url, cfg.get("tabLoadTimeoutMs") or 12000)
+                if sec_dynamic:
+                    scrape_html(sec_url, sec_dynamic, hits)
             except Exception:
                 pass
 
         # raw source strategy
-        for e in extract_from_text(html):
+        for e in extract_from_text(raw_html):
             hits.append(EmailHit(e, "raw"))
+        if dynamic_html:
+            for e in extract_from_text(dynamic_html):
+                hits.append(EmailHit(e, "raw"))
 
         cleaned = apply_filters(hits, cfg.get("excludeEmails", []))
         page_txt = soup.get_text(" ", strip=True).lower() if soup else ""
@@ -354,7 +412,8 @@ def run_worker():
             if result["status"] in {"skipped_error", "no_content"}:
                 # one retry with longer timeout
                 retry_cfg = dict(state)
-                retry_cfg["hardUrlTimeoutMs"] = int((state.get("hardUrlTimeoutMs") or 15000) * 1.5)
+                retry_cfg["hardUrlTimeoutMs"] = int((state.get("hardUrlTimeoutMs") or 45000) * 1.5)
+                retry_cfg["tabLoadTimeoutMs"] = int((state.get("tabLoadTimeoutMs") or 12000) * 1.5)
                 retry = process_single_url(state["urls"][idx], retry_cfg)
                 if retry["status"] == "success":
                     result = retry
@@ -411,7 +470,7 @@ def api_start():
             "excludeEmails": parse_rules(body.get("excludeRaw", "")),
             "tabLoadTimeoutMs": int(body.get("tabLoadTimeoutMs") or 12000),
             "forceSkipAfterMs": int(body.get("forceSkipAfterMs") or 0) or None,
-            "hardUrlTimeoutMs": int(body.get("hardUrlTimeoutMs") or 15000),
+            "hardUrlTimeoutMs": int(body.get("hardUrlTimeoutMs") or 45000),
         })
         save_state(state)
 
