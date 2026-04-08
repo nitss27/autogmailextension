@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Email Harvester Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <main class="wrap">
+    <h1>Bulk Email Harvester (Python Dashboard)</h1>
+    <div id="status" class="status">Idle</div>
+
+    <label>Domains / URLs (one per line)</label>
+    <textarea id="urls" placeholder="example.com\nhttps://site.org"></textarea>
+
+    <label id="ruleLabel">Exclude (0 rules)</label>
+    <textarea id="exclude" class="small" placeholder="# comment\n@example.com\nnoreply"></textarea>
+
+    <div class="grid">
+      <label>Tab Timeout (ms)<input id="tabTimeout" type="number" value="12000" /></label>
+      <label>Force Skip After (ms)<input id="forceSkip" type="number" value="0" /></label>
+      <label>Hard Max Per Site (ms)<input id="hardTimeout" type="number" value="45000" /></label>
+    </div>
+
+    <div class="row">
+      <button id="start">▶ Start New</button>
+      <button id="cont">⟳ Continue</button>
+      <button id="stop">⏸ Stop</button>
+      <button id="force">⏹ Force Stop</button>
+      <button id="skip">⏭ Skip Current</button>
+      <button id="reset">✕ Reset</button>
+    </div>
+
+    <div class="row">
+      <button id="copyTable">⎘ Copy Table</button>
+      <button id="copyEmails">Copy Emails Only</button>
+    </div>
+
+    <div id="summary" class="summary">No run yet.</div>
+    <table>
+      <thead><tr><th>Domain</th><th>Emails</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>

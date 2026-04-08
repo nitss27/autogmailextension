@@ -1,0 +1,15 @@
+body { background:#11151a;color:#e8edf7;font-family:'DM Sans',sans-serif;margin:0;padding:16px; }
+.wrap{max-width:980px;margin:auto}
+textarea,input{width:100%;background:#1b222b;color:#e8edf7;border:1px solid #2a3442;border-radius:8px;padding:8px;font-family:'JetBrains Mono',monospace}
+textarea{min-height:120px;margin-bottom:10px}
+textarea.small{min-height:70px}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:8px}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+button{border:0;border-radius:8px;padding:10px 12px;background:#2563eb;color:#fff;cursor:pointer}
+#force{background:#dc2626} #stop{background:#d97706} #skip{background:#7c3aed} #reset{background:#4b5563}
+.status{padding:8px 10px;background:#1b222b;border:1px solid #2a3442;border-radius:8px;display:inline-block;margin-bottom:10px}
+.summary{color:#9fb0c7;margin:8px 0}
+table{width:100%;border-collapse:collapse} th,td{padding:8px;border-bottom:1px solid #2a3442;vertical-align:top}
+.email{font-family:'JetBrains Mono',monospace;margin-bottom:4px}
+.badge{font-size:10px;padding:2px 6px;border-radius:999px;margin-left:6px}.high{background:#16a34a}.medium{background:#0ea5e9}.low{background:#9333ea}
+.error{color:#fca5a5;font-size:12px}
