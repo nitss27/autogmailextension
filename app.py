@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Production-ready CLI email scraper with resilient queueing."""
+"""Web UI email scraper with file-backed pending queue and headed-browser opening."""
 
 from __future__ import annotations
 
@@ -22,6 +22,13 @@ from urllib.robotparser import RobotFileParser
 
 import requests
 from bs4 import BeautifulSoup
+from flask import Flask, jsonify, render_template_string, request
+
+try:
+    from playwright.sync_api import sync_playwright
+    PLAYWRIGHT_AVAILABLE = True
+except Exception:
+    PLAYWRIGHT_AVAILABLE = False
 
 INPUT_FILE = Path("input.txt")
 PENDING_FILE = Path("pending.txt")
@@ -32,11 +39,8 @@ USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
 ]
-
 CONTACT_HINTS = ("contact", "about", "team", "support")
-
 EMAIL_REGEX = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,63}")
 MAILTO_REGEX = re.compile(r"mailto:([^\s'\"?#>]+)", re.IGNORECASE)
 
@@ -45,22 +49,15 @@ REJECT_TLDS = {
     "ts", "tsx", "json", "xml", "zip", "gz", "woff", "woff2", "ttf", "eot", "otf", "map",
     "mp4", "mp3", "wav", "cat", "pbz", "bet", "arg", "rqh",
 }
-
 REJECT_LOCAL_PARTS = {
     "noreply", "no-reply", "donotreply", "do-not-reply", "unsubscribe", "bounce", "mailer-daemon",
     "postmaster", "abuse", "spam", "webmaster", "root", "www",
 }
-
 REJECT_DOMAINS = {
     "example.com", "test.com", "localhost", "domain.com", "yourdomain.com", "email.com", "website.com",
     "yoursite.com", "sentry.io", "sentry-next.wixpress.com", "2x.cat",
 }
-
-REJECT_IMAGE_PATTERN = re.compile(
-    r"(logo|icon|image|img|banner|bg|background|sprite|thumb|photo|avatar|favicon|"
-    r"placeholder|hero|cover|tile|asset|graphic).*@\d",
-    re.IGNORECASE,
-)
+REJECT_IMAGE_PATTERN = re.compile(r"(logo|icon|image|img|banner|bg|background|sprite|thumb|photo|avatar|favicon|placeholder|hero|cover|tile|asset|graphic).*@\d", re.I)
 
 
 @dataclass
@@ -68,161 +65,159 @@ class SiteResult:
     domain: str
     emails: list[str]
     failed: bool
-    reason: Optional[str] = None
+    reason: str = ""
 
 
 class PendingQueue:
     def __init__(self, path: Path) -> None:
         self.path = path
-        self._lock = threading.Lock()
-        self._pending = self._load()
+        self.lock = threading.Lock()
+        self.pending = self._load()
 
     def _load(self) -> set[str]:
         if not self.path.exists():
             return set()
-        return {line.strip() for line in self.path.read_text(encoding="utf-8").splitlines() if line.strip()}
+        return {x.strip() for x in self.path.read_text(encoding="utf-8").splitlines() if x.strip()}
 
     def snapshot(self) -> set[str]:
-        with self._lock:
-            return set(self._pending)
+        with self.lock:
+            return set(self.pending)
 
     def add(self, url: str) -> None:
-        with self._lock:
-            self._pending.add(url)
+        with self.lock:
+            self.pending.add(url)
             self._flush()
 
     def remove(self, url: str) -> None:
-        with self._lock:
-            self._pending.discard(url)
+        with self.lock:
+            self.pending.discard(url)
             self._flush()
 
     def _flush(self) -> None:
-        lines = "\n".join(sorted(self._pending))
-        self.path.write_text(lines + ("\n" if lines else ""), encoding="utf-8")
+        data = "\n".join(sorted(self.pending))
+        self.path.write_text(data + ("\n" if data else ""), encoding="utf-8")
+
+
+class HeadedBrowser:
+    def __init__(self) -> None:
+        self.enabled = PLAYWRIGHT_AVAILABLE
+        self.lock = threading.Lock()
+
+    def open_page(self, url: str, timeout: int) -> None:
+        if not self.enabled:
+            return
+        with self.lock:
+            try:
+                with sync_playwright() as p:
+                    browser = p.chromium.launch(headless=False)
+                    page = browser.new_page()
+                    page.goto(url, timeout=timeout * 1000, wait_until="domcontentloaded")
+                    page.wait_for_timeout(1200)
+                    browser.close()
+            except Exception as exc:
+                logging.exception("Headed browser open failed for %s", url, exc_info=exc)
 
 
 class EmailScraper:
-    def __init__(
-        self,
-        timeout: int,
-        max_pages: int,
-        exclude_emails: set[str],
-        exclude_domains: set[str],
-    ) -> None:
+    def __init__(self, timeout: int, max_pages: int, exclude_emails: set[str], exclude_domains: set[str], open_headed: bool) -> None:
         self.timeout = timeout
         self.max_pages = max_pages
-        self.exclude_emails = {e.lower() for e in exclude_emails if e}
-        self.exclude_domains = {d.lower().lstrip("@") for d in exclude_domains if d}
+        self.exclude_emails = {e.lower() for e in exclude_emails}
+        self.exclude_domains = {d.lower().lstrip('@') for d in exclude_domains}
+        self.browser = HeadedBrowser()
+        self.open_headed = open_headed
 
-    def process_website(self, raw_url: str) -> SiteResult:
-        url = normalize_url(raw_url)
-        parsed = urlparse(url)
-        domain = parsed.netloc.lower()
-
+    def process_site(self, website: str) -> SiteResult:
+        url = normalize_url(website)
+        domain = urlparse(url).netloc.lower()
+        if self.open_headed:
+            self.browser.open_page(url, self.timeout)
         if not self._robots_allowed(url):
-            print(f"[WARN] robots.txt disallows scraping for {domain}; continuing gracefully.")
+            logging.warning("robots disallow for %s", url)
 
-        discovered = self._discover_pages(url)
-        all_emails: set[str] = set()
-
-        for page in discovered:
-            html_text, soup = self._fetch_page(page)
+        found = set()
+        for page in self._discover_pages(url):
+            if self.open_headed:
+                self.browser.open_page(page, self.timeout)
+            html_text, soup = self._fetch(page)
             if not html_text or soup is None:
                 continue
-            for extractor in (
-                self.extract_from_mailto,
-                self.extract_from_raw_html,
-                self.extract_from_json_ld,
-                self.extract_from_meta,
-                self.extract_from_microdata,
-                self.extract_from_data_attributes,
-                self.extract_from_visible_text,
-                self.extract_from_entities,
-                self.extract_from_obfuscation,
+            for method in (
+                self.extract_mailto, self.extract_raw, self.extract_jsonld, self.extract_meta,
+                self.extract_microdata, self.extract_data_attributes, self.extract_visible_text,
+                self.extract_entities, self.extract_obfuscation,
             ):
                 try:
-                    all_emails.update(extractor(html_text, soup))
-                except Exception as exc:  # defensive per-strategy logging
-                    logging.exception("Extractor failure on %s with %s", page, extractor.__name__, exc_info=exc)
-
-        clean = sorted(self.filter_emails(all_emails))
-        return SiteResult(domain=domain, emails=clean, failed=False)
-
-    def _fetch_page(self, url: str) -> tuple[Optional[str], Optional[BeautifulSoup]]:
-        headers = {"User-Agent": random.choice(USER_AGENTS)}
-        try:
-            response = requests.get(url, timeout=min(15, self.timeout), headers=headers)
-            response.raise_for_status()
-            text = response.text
-            return text, BeautifulSoup(text, "html.parser")
-        except Exception as exc:
-            logging.exception("Failed fetching %s", url, exc_info=exc)
-            return None, None
+                    found.update(method(html_text, soup))
+                except Exception as exc:
+                    logging.exception("extractor failed %s on %s", method.__name__, page, exc_info=exc)
+        return SiteResult(domain=domain, emails=sorted(self.filter_emails(found)), failed=False)
 
     def _robots_allowed(self, url: str) -> bool:
-        parsed = urlparse(url)
-        robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
+        p = urlparse(url)
         parser = RobotFileParser()
         try:
-            parser.set_url(robots_url)
+            parser.set_url(f"{p.scheme}://{p.netloc}/robots.txt")
             parser.read()
             return parser.can_fetch("*", url)
         except Exception as exc:
-            logging.exception("robots.txt check failed for %s", url, exc_info=exc)
-            print(f"[WARN] Could not read robots.txt for {parsed.netloc}; continuing.")
+            logging.exception("robots error for %s", url, exc_info=exc)
             return True
 
+    def _fetch(self, url: str) -> tuple[Optional[str], Optional[BeautifulSoup]]:
+        try:
+            r = requests.get(url, timeout=min(15, self.timeout), headers={"User-Agent": random.choice(USER_AGENTS)})
+            r.raise_for_status()
+            return r.text, BeautifulSoup(r.text, "html.parser")
+        except Exception as exc:
+            logging.exception("fetch failed for %s", url, exc_info=exc)
+            return None, None
+
     def _discover_pages(self, root_url: str) -> list[str]:
-        urls = [root_url]
-        parsed_root = urlparse(root_url)
-        base = f"{parsed_root.scheme}://{parsed_root.netloc}"
-
-        # deterministic fallback paths
+        pages = [root_url]
+        parsed = urlparse(root_url)
+        base = f"{parsed.scheme}://{parsed.netloc}/"
         for hint in CONTACT_HINTS:
-            if len(urls) >= self.max_pages + 1:
-                return urls
-            urls.append(urljoin(base + "/", hint))
+            if len(pages) >= self.max_pages + 1:
+                return pages
+            pages.append(urljoin(base, hint))
 
-        html_text, soup = self._fetch_page(root_url)
+        html_text, soup = self._fetch(root_url)
         if not html_text or soup is None:
-            return urls[: self.max_pages + 1]
+            return pages[: self.max_pages + 1]
 
-        for anchor in soup.select("a[href]"):
-            href = anchor.get("href", "")
+        for a in soup.select("a[href]"):
+            href = a.get("href", "")
             if not any(h in href.lower() for h in CONTACT_HINTS):
                 continue
-            absolute = urljoin(root_url, href)
-            parsed = urlparse(absolute)
-            if parsed.netloc.lower() != parsed_root.netloc.lower():
+            candidate = urljoin(root_url, href)
+            cp = urlparse(candidate)
+            if cp.netloc.lower() != parsed.netloc.lower():
                 continue
-            clean = f"{parsed.scheme}://{parsed.netloc}{parsed.path}".rstrip("/")
-            if clean and clean not in urls:
-                urls.append(clean)
-            if len(urls) >= self.max_pages + 1:
+            clean = f"{cp.scheme}://{cp.netloc}{cp.path}".rstrip("/")
+            if clean and clean not in pages:
+                pages.append(clean)
+            if len(pages) >= self.max_pages + 1:
                 break
-        return urls[: self.max_pages + 1]
+        return pages[: self.max_pages + 1]
 
-    def extract_from_mailto(self, html_text: str, soup: BeautifulSoup) -> set[str]:
+    def extract_mailto(self, html_text: str, soup: BeautifulSoup) -> set[str]:
         return set(MAILTO_REGEX.findall(html_text))
 
-    def extract_from_raw_html(self, html_text: str, soup: BeautifulSoup) -> set[str]:
+    def extract_raw(self, html_text: str, soup: BeautifulSoup) -> set[str]:
         return set(EMAIL_REGEX.findall(html_text))
 
-    def extract_from_json_ld(self, html_text: str, soup: BeautifulSoup) -> set[str]:
+    def extract_jsonld(self, html_text: str, soup: BeautifulSoup) -> set[str]:
         emails = set()
         for node in soup.find_all("script", attrs={"type": "application/ld+json"}):
-            raw = node.get_text(" ", strip=True)
-            if not raw:
-                continue
+            payload = node.get_text(" ", strip=True)
             try:
-                parsed = json.loads(raw)
-                blob = json.dumps(parsed)
-                emails.update(EMAIL_REGEX.findall(blob))
-            except json.JSONDecodeError:
-                emails.update(EMAIL_REGEX.findall(raw))
+                emails.update(EMAIL_REGEX.findall(json.dumps(json.loads(payload))))
+            except Exception:
+                emails.update(EMAIL_REGEX.findall(payload))
         return emails
 
-    def extract_from_meta(self, html_text: str, soup: BeautifulSoup) -> set[str]:
+    def extract_meta(self, html_text: str, soup: BeautifulSoup) -> set[str]:
         emails = set()
         for meta in soup.find_all("meta"):
             content = meta.get("content")
@@ -230,97 +225,66 @@ class EmailScraper:
                 emails.update(EMAIL_REGEX.findall(content))
         return emails
 
-    def extract_from_microdata(self, html_text: str, soup: BeautifulSoup) -> set[str]:
+    def extract_microdata(self, html_text: str, soup: BeautifulSoup) -> set[str]:
         emails = set()
         for node in soup.select('[itemprop="email"]'):
             emails.update(EMAIL_REGEX.findall(node.get_text(" ", strip=True)))
             for attr in ("content", "href"):
-                value = node.get(attr)
-                if value:
-                    emails.update(EMAIL_REGEX.findall(value))
+                if node.get(attr):
+                    emails.update(EMAIL_REGEX.findall(node[attr]))
         return emails
 
-    def extract_from_data_attributes(self, html_text: str, soup: BeautifulSoup) -> set[str]:
+    def extract_data_attributes(self, html_text: str, soup: BeautifulSoup) -> set[str]:
         emails = set()
         for node in soup.find_all(True):
             for attr in ("data-email", "data-contact", "data-mail"):
-                value = node.get(attr)
-                if value:
-                    emails.update(EMAIL_REGEX.findall(value))
+                if node.get(attr):
+                    emails.update(EMAIL_REGEX.findall(node[attr]))
         return emails
 
-    def extract_from_visible_text(self, html_text: str, soup: BeautifulSoup) -> set[str]:
-        text = soup.get_text(" ", strip=True)
-        normalized = decode_at_dot_obfuscation(text)
-        return set(EMAIL_REGEX.findall(normalized))
+    def extract_visible_text(self, html_text: str, soup: BeautifulSoup) -> set[str]:
+        return set(EMAIL_REGEX.findall(decode_obfuscation(soup.get_text(" ", strip=True))))
 
-    def extract_from_entities(self, html_text: str, soup: BeautifulSoup) -> set[str]:
-        decoded = html.unescape(html_text)
-        return set(EMAIL_REGEX.findall(decoded))
+    def extract_entities(self, html_text: str, soup: BeautifulSoup) -> set[str]:
+        return set(EMAIL_REGEX.findall(html.unescape(html_text)))
 
-    def extract_from_obfuscation(self, html_text: str, soup: BeautifulSoup) -> set[str]:
-        candidates = set()
-        decoded = decode_at_dot_obfuscation(html_text)
-        candidates.update(EMAIL_REGEX.findall(decoded))
-
+    def extract_obfuscation(self, html_text: str, soup: BeautifulSoup) -> set[str]:
+        emails = set(EMAIL_REGEX.findall(decode_obfuscation(html_text)))
         for token in re.findall(r"[A-Za-z0-9+/=]{12,}", html_text):
             if len(token) % 4 != 0:
                 continue
             try:
-                plain = base64.b64decode(token).decode("utf-8", errors="ignore")
-                candidates.update(EMAIL_REGEX.findall(plain))
+                emails.update(EMAIL_REGEX.findall(base64.b64decode(token).decode("utf-8", errors="ignore")))
             except Exception:
-                continue
-
-        rot13 = codecs.decode(decoded, "rot_13")
-        candidates.update(EMAIL_REGEX.findall(rot13))
-
-        reversed_blob = decoded[::-1]
-        candidates.update(EMAIL_REGEX.findall(reversed_blob))
-        return candidates
+                pass
+        emails.update(EMAIL_REGEX.findall(codecs.decode(html_text, "rot_13")))
+        emails.update(EMAIL_REGEX.findall(html_text[::-1]))
+        return emails
 
     def filter_emails(self, emails: Iterable[str]) -> set[str]:
         valid = set()
         for raw in emails:
-            email = raw.strip().strip(".,;:()[]<>{}\"'").lower()
-            if not email or "@" not in email:
+            e = raw.strip().strip(".,;:()[]<>{}\"'").lower()
+            if not e or "@" not in e or not EMAIL_REGEX.fullmatch(e):
                 continue
-            if email in self.exclude_emails:
+            if e in self.exclude_emails:
                 continue
-            local, domain = email.rsplit("@", 1)
-            domain = domain.strip(".")
+            local, domain = e.rsplit("@", 1)
             tld = domain.rsplit(".", 1)[-1] if "." in domain else ""
-
-            if not domain or not local:
-                continue
             if local in REJECT_LOCAL_PARTS:
                 continue
-            if domain in REJECT_DOMAINS or domain in self.exclude_domains:
+            if domain in REJECT_DOMAINS:
                 continue
-            if any(domain == d or domain.endswith(f".{d}") for d in self.exclude_domains):
+            if domain in self.exclude_domains or any(domain.endswith(f".{d}") for d in self.exclude_domains):
                 continue
-            if tld in REJECT_TLDS:
+            if tld in REJECT_TLDS or REJECT_IMAGE_PATTERN.search(e):
                 continue
-            if REJECT_IMAGE_PATTERN.search(email):
-                continue
-            if not EMAIL_REGEX.fullmatch(email):
-                continue
-            valid.add(email)
+            valid.add(e)
         return valid
 
 
-def normalize_url(raw_url: str) -> str:
-    url = raw_url.strip()
-    if not url:
-        return url
-    if not re.match(r"^https?://", url, re.IGNORECASE):
-        return f"https://{url}"
-    return url
-
-
-def decode_at_dot_obfuscation(text: str) -> str:
-    normalized = text
-    replacements = {
+def decode_obfuscation(text: str) -> str:
+    patterns = {
         r"\s*\[\s*at\s*\]\s*": "@",
         r"\s*\(\s*at\s*\)\s*": "@",
         r"\s+at\s+": "@",
@@ -330,140 +294,134 @@ def decode_at_dot_obfuscation(text: str) -> str:
         r"\s+AT\s+": "@",
         r"\s+DOT\s+": ".",
     }
-    for pattern, repl in replacements.items():
-        normalized = re.sub(pattern, repl, normalized, flags=re.IGNORECASE)
-    normalized = html.unescape(normalized)
-    return normalized
+    out = html.unescape(text)
+    for p, rep in patterns.items():
+        out = re.sub(p, rep, out, flags=re.IGNORECASE)
+    return out
 
 
-def load_websites(args_websites: list[str]) -> list[str]:
-    websites = list(args_websites)
-    if INPUT_FILE.exists():
-        websites.extend([
-            line.strip() for line in INPUT_FILE.read_text(encoding="utf-8").splitlines()
-            if line.strip() and not line.strip().startswith("#")
-        ])
-    # preserve order, dedupe
-    seen = set()
-    ordered = []
-    for site in websites:
-        if site not in seen:
-            seen.add(site)
-            ordered.append(site)
-    return ordered
+def normalize_url(raw: str) -> str:
+    raw = raw.strip()
+    if raw and not re.match(r"^https?://", raw, flags=re.I):
+        return f"https://{raw}"
+    return raw
 
 
-def run_with_timeout(scraper: EmailScraper, website: str, timeout: int) -> SiteResult:
-    box: dict[str, SiteResult] = {}
-    err: dict[str, Exception] = {}
+def run_with_timeout(scraper: EmailScraper, site: str, timeout: int) -> SiteResult:
+    result: dict[str, SiteResult] = {}
+    exc: dict[str, Exception] = {}
 
     def worker() -> None:
         try:
-            box["result"] = scraper.process_website(website)
-        except Exception as exc:
-            err["exc"] = exc
+            result["r"] = scraper.process_site(site)
+        except Exception as err:
+            exc["e"] = err
 
-    thread = threading.Thread(target=worker, daemon=True)
-    thread.start()
-    thread.join(timeout=timeout)
+    t = threading.Thread(target=worker, daemon=True)
+    t.start()
+    t.join(timeout=timeout)
+    domain = urlparse(normalize_url(site)).netloc.lower() or site
+    if t.is_alive():
+        return SiteResult(domain, [], True, "timeout")
+    if "e" in exc:
+        logging.exception("process failed for %s", site, exc_info=exc["e"])
+        return SiteResult(domain, [], True, "error")
+    return result["r"]
 
-    domain = urlparse(normalize_url(website)).netloc.lower() or website
-    if thread.is_alive():
-        return SiteResult(domain=domain, emails=[], failed=True, reason="timeout")
-    if "exc" in err:
-        logging.exception("Site processing failed for %s", website, exc_info=err["exc"])
-        return SiteResult(domain=domain, emails=[], failed=True, reason="error")
-    return box["result"]
+
+def load_sites(text_blob: str, uploaded_blob: str) -> list[str]:
+    sites = [line.strip() for line in text_blob.splitlines() if line.strip()]
+    sites.extend([line.strip() for line in uploaded_blob.splitlines() if line.strip() and not line.strip().startswith("#")])
+    if INPUT_FILE.exists():
+        sites.extend([x.strip() for x in INPUT_FILE.read_text(encoding="utf-8").splitlines() if x.strip() and not x.strip().startswith("#")])
+    seen, ordered = set(), []
+    for s in sites:
+        n = normalize_url(s)
+        if n and n not in seen:
+            seen.add(n)
+            ordered.append(n)
+    return ordered
 
 
-def write_csv(results: list[SiteResult]) -> None:
+def write_csv(rows: list[SiteResult]) -> None:
     with OUTPUT_FILE.open("w", encoding="utf-8", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["domain", "emails"])
-        for result in results:
-            writer.writerow([result.domain, ", ".join(result.emails)])
+        w = csv.writer(f)
+        w.writerow(["domain", "emails"])
+        for row in rows:
+            w.writerow([row.domain, ", ".join(row.emails)])
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Scrape emails from websites with resilient queueing.")
-    parser.add_argument("websites", nargs="*", help="Websites to process. Also reads input.txt when present.")
-    parser.add_argument("--timeout", type=int, default=45, help="Hard timeout per website in seconds.")
-    parser.add_argument("--continue", dest="continue_mode", action="store_true", help="Reprocess sites in pending.txt.")
-    parser.add_argument("--exclude-emails", default="", help="Comma-separated emails to exclude.")
-    parser.add_argument("--exclude-domains", default="", help="Comma-separated domains to exclude.")
-    parser.add_argument("--max-pages", type=int, default=5, help="Max secondary pages to visit per domain.")
-    parser.add_argument("--workers", type=int, default=6, help="Parallel worker count.")
-    return parser.parse_args()
+app = Flask(__name__)
+logging.basicConfig(filename=ERROR_FILE, level=logging.ERROR, format="%(asctime)s %(levelname)s %(message)s")
 
 
-def main() -> None:
-    logging.basicConfig(
-        filename=ERROR_FILE,
-        level=logging.ERROR,
-        format="%(asctime)s %(levelname)s %(message)s",
-    )
+@app.get("/")
+def home():
+    return render_template_string(Path("index.html").read_text(encoding="utf-8"), playwright_available=PLAYWRIGHT_AVAILABLE)
 
-    args = parse_args()
-    websites = load_websites(args.websites)
-    if not websites:
-        print("No websites provided. Pass URLs or create input.txt.")
-        return
 
-    pending_queue = PendingQueue(PENDING_FILE)
-    previous_pending = pending_queue.snapshot()
+@app.post("/run")
+def run_scrape():
+    payload = request.get_json(force=True, silent=True) or {}
+    websites_text = payload.get("websites", "")
+    uploaded_text = payload.get("uploaded", "")
+    timeout = int(payload.get("timeout", 45))
+    continue_mode = bool(payload.get("continue", False))
+    max_pages = int(payload.get("max_pages", 5))
+    workers = int(payload.get("workers", 4))
+    open_headed = bool(payload.get("open_headed", True))
+    exclude_emails = {x.strip().lower() for x in payload.get("exclude_emails", "").split(",") if x.strip()}
+    exclude_domains = {x.strip().lower() for x in payload.get("exclude_domains", "").split(",") if x.strip()}
 
-    if not args.continue_mode:
-        sites_to_process = [w for w in websites if normalize_url(w) not in previous_pending]
-    else:
-        sites_to_process = websites
+    sites = load_sites(websites_text, uploaded_text)
+    queue = PendingQueue(PENDING_FILE)
+    prior_pending = queue.snapshot()
+    if not continue_mode:
+        sites = [s for s in sites if s not in prior_pending]
 
-    if not sites_to_process:
-        print("Nothing to process after pending-queue filtering.")
-        return
+    scraper = EmailScraper(timeout, max(0, max_pages), exclude_emails, exclude_domains, open_headed)
+    results, failed = [], 0
 
-    scraper = EmailScraper(
-        timeout=args.timeout,
-        max_pages=max(0, args.max_pages),
-        exclude_emails=set(x.strip().lower() for x in args.exclude_emails.split(",") if x.strip()),
-        exclude_domains=set(x.strip().lower() for x in args.exclude_domains.split(",") if x.strip()),
-    )
-
-    results: list[SiteResult] = []
-    failures = 0
-
-    with ThreadPoolExecutor(max_workers=max(1, args.workers)) as executor:
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as executor:
         future_map = {}
-        for raw_site in sites_to_process:
-            normalized = normalize_url(raw_site)
-            pending_queue.add(normalized)
-            future = executor.submit(run_with_timeout, scraper, normalized, args.timeout)
-            future_map[future] = normalized
+        for site in sites:
+            queue.add(site)
+            future_map[executor.submit(run_with_timeout, scraper, site, timeout)] = site
 
         for future in as_completed(future_map):
             site = future_map[future]
             try:
-                result = future.result()
+                row = future.result()
             except Exception as exc:
-                logging.exception("Unhandled future failure for %s", site, exc_info=exc)
-                result = SiteResult(domain=urlparse(site).netloc.lower(), emails=[], failed=True, reason="error")
-
-            if result.failed:
-                failures += 1
-                print(f"{result.domain} -> FAILED ({result.reason})")
+                logging.exception("future crash for %s", site, exc_info=exc)
+                row = SiteResult(urlparse(site).netloc.lower(), [], True, "error")
+            if row.failed:
+                failed += 1
             else:
-                pending_queue.remove(site)
-                print(f"{result.domain} → {', '.join(result.emails) if result.emails else '(none)'}")
-            results.append(result)
+                queue.remove(site)
+            results.append(row)
 
-    successful_results = [r for r in results if not r.failed]
-    write_csv(successful_results)
+    ok = [r for r in results if not r.failed]
+    write_csv(ok)
+    return jsonify({
+        "results": [{"domain": r.domain, "emails": r.emails, "failed": r.failed, "reason": r.reason} for r in results],
+        "summary": {
+            "sites_processed": len(results),
+            "emails_found": sum(len(r.emails) for r in ok),
+            "sites_failed": failed,
+            "playwright_available": PLAYWRIGHT_AVAILABLE,
+        },
+    })
 
-    total_emails = sum(len(r.emails) for r in successful_results)
-    print("\nSummary")
-    print(f"Total sites processed: {len(results)}")
-    print(f"Total emails found: {total_emails}")
-    print(f"Sites failed/timed out: {failures}")
+
+def cli() -> argparse.Namespace:
+    p = argparse.ArgumentParser()
+    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--port", type=int, default=5000)
+    p.add_argument("--debug", action="store_true")
+    return p.parse_args()
 
 
 if __name__ == "__main__":
-    main()
+    args = cli()
+    app.run(host=args.host, port=args.port, debug=args.debug)
