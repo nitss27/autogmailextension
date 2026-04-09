@@ -1,76 +1,21 @@
-# Bulk Email Harvester
+# Bulk Email Harvester (Web UI + Hard Timeout Worker)
 
-A Python/Flask web app that scrapes emails from multiple domains using 10+ extraction strategies.
+This app provides a browser UI for scraping emails from websites while enforcing a strict per-site hard timeout.
 
-## Quick Start
-
-### macOS / Linux
-```bash
-bash run.sh
-```
-
-### Windows
-Double-click `run.bat`
-
-Then open: **http://127.0.0.1:5000**
-
----
-
-## Features
-
-### Extraction Strategies (all run per domain)
-1. **mailto: href** — dedicated regex for `<a href="mailto:...">` (HIGH confidence)
-2. **Raw HTML scan** — regex across full server-returned HTML
-3. **JSON-LD structured data** — parses `<script type="application/ld+json">`
-4. **Meta tag content** — scans all `<meta content="...">` values
-5. **Schema.org microdata** — `[itemprop="email"]` elements
-6. **data-* attributes** — `data-email`, `data-contact`, `data-mail`
-7. **Visible body text** — `soup.get_text()` with AT/DOT decoding
-8. **HTML entity decoding** — `&#64;` → `@`
-9. **Obfuscation decoding** — `[at]`, `(at)`, `AT`, `[dot]`, base64, ROT13, reversed strings
-10. **Secondary page discovery** — visits contact/about/team/support pages (configurable limit)
-
-### Reliability
-- Hard per-URL timeout (default 45s, configurable) — never hangs the queue
-- Skip current URL button
-- Stop / Force Stop / Continue (resume from where stopped)
-- HTTPS → HTTP fallback, www. prefix fallback
-- All errors caught and logged per domain
-
-### Email Cleaning
-- Rejects placeholder emails (noreply, example@, test@, etc.)
-- Rejects file-extension false positives (.png, .jpg, .css, .js, etc.)
-- Rejects file-path-like patterns
-- Deduplication with confidence-based priority
-- Per-domain cap (default 20 emails)
-- Exclusion rules: exact email, domain wildcard, keyword
-
-### Dashboard
-- Dark industrial UI (DM Sans + JetBrains Mono)
-- Live row-by-row results as each domain finishes
-- Confidence badges: HIGH (green) / MEDIUM (amber) / LOW (gray)
-- Copy as TSV table or plain email list
-- Progress bar + status indicator
-
----
-
-## Manual Install (without run.sh)
+## Run
 
 ```bash
-pip install flask requests beautifulsoup4 lxml
+pip install -r requirements.txt
 python app.py
 ```
 
----
+Open `http://127.0.0.1:5000`.
 
-## Exclusion Rule Syntax
+## Key behavior
 
-Paste rules in the "Exclude Rules" box:
-
-```
-# Lines starting with # are ignored
-noreply@example.com        # exact email
-@example.com               # entire domain + subdomains
-noreply                    # keyword in local part
-@.png                      # reject any email with .png TLD
-```
+- Hard timeout is enforced with `threading.Timer` per URL.
+- On timeout/skip/stop, the current browser page is force-closed.
+- Timed-out domains are persisted in `skip_domains.txt` and auto-skipped next run.
+- Successful domains are removed from `skip_domains.txt`.
+- Secondary contact/about/support pages are discovered and scraped (`max_pages` from UI).
+- UI supports direct paste + `.txt` upload.

@@ -4,854 +4,109 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Bulk Email Harvester</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
   <style>
-    :root {
-      --bg:       #0d0e11;
-      --surface:  #16181f;
-      --border:   #252830;
-      --text:     #e2e4ea;
-      --muted:    #6b7280;
-      --blue:     #3b82f6;
-      --blue-d:   #2563eb;
-      --purple:   #8b5cf6;
-      --teal:     #14b8a6;
-      --amber:    #f59e0b;
-      --red:      #ef4444;
-      --green:    #22c55e;
-      --gray:     #374151;
-      --mono:     'JetBrains Mono', monospace;
-      --sans:     'DM Sans', sans-serif;
-    }
-
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-
-    body {
-      background: var(--bg);
-      color: var(--text);
-      font-family: var(--sans);
-      min-height: 100vh;
-      padding: 24px 16px;
-    }
-
-    .container {
-      max-width: 820px;
-      margin: 0 auto;
-    }
-
-    /* Header */
-    .header {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      margin-bottom: 28px;
-    }
-    .header-icon {
-      width: 40px;
-      height: 40px;
-      background: linear-gradient(135deg, var(--blue), var(--purple));
-      border-radius: 10px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 20px;
-    }
-    .header h1 {
-      font-size: 22px;
-      font-weight: 600;
-      letter-spacing: -0.3px;
-    }
-    .header span {
-      font-size: 13px;
-      color: var(--muted);
-      font-family: var(--mono);
-    }
-
-    /* Card */
-    .card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 20px;
-      margin-bottom: 16px;
-    }
-
-    /* Labels */
-    label {
-      display: block;
-      font-size: 12px;
-      font-weight: 600;
-      color: var(--muted);
-      letter-spacing: 0.6px;
-      text-transform: uppercase;
-      margin-bottom: 8px;
-    }
-
-    /* Textareas */
-    textarea, input[type=number], input[type=text] {
-      width: 100%;
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      color: var(--text);
-      font-family: var(--mono);
-      font-size: 12px;
-      padding: 10px 12px;
-      resize: vertical;
-      outline: none;
-      transition: border-color 0.2s;
-    }
-    textarea:focus, input:focus {
-      border-color: var(--blue);
-    }
-    #urlInput {
-      height: 140px;
-      line-height: 1.8;
-    }
-    #excludeInput {
-      height: 80px;
-    }
-
-    /* Settings row */
-    .settings-row {
-      display: grid;
-      grid-template-columns: 1fr 1fr 1fr;
-      gap: 12px;
-      margin-top: 12px;
-    }
-    .settings-row input[type=number] {
-      resize: none;
-      height: 38px;
-    }
-    .setting-item label {
-      margin-bottom: 4px;
-    }
-
-    /* Buttons */
-    .btn-row {
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-      margin-top: 4px;
-    }
-    button {
-      font-family: var(--sans);
-      font-size: 13px;
-      font-weight: 600;
-      padding: 8px 16px;
-      border: none;
-      border-radius: 8px;
-      cursor: pointer;
-      transition: opacity 0.15s, transform 0.1s;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-    button:active { transform: scale(0.97); }
-    button:disabled { opacity: 0.4; cursor: not-allowed; }
-
-    .btn-blue   { background: var(--blue);   color: #fff; }
-    .btn-purple { background: var(--purple); color: #fff; }
-    .btn-teal   { background: var(--teal);   color: #fff; }
-    .btn-amber  { background: var(--amber);  color: #000; }
-    .btn-red    { background: var(--red);    color: #fff; }
-    .btn-gray   { background: var(--gray);   color: var(--text); }
-
-    button:hover:not(:disabled) { opacity: 0.87; }
-
-    /* Status bar */
-    .status-bar {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 12px 16px;
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      margin-top: 16px;
-      font-family: var(--mono);
-      font-size: 12px;
-    }
-    .dot {
-      width: 9px;
-      height: 9px;
-      border-radius: 50%;
-      flex-shrink: 0;
-    }
-    .dot-idle   { background: var(--muted); }
-    .dot-run    { background: var(--blue);  animation: pulse 1.2s infinite; }
-    .dot-done   { background: var(--green); }
-    .dot-error  { background: var(--red); }
-    .dot-warn   { background: var(--amber); }
-
-    @keyframes pulse {
-      0%,100% { opacity: 1; }
-      50%      { opacity: 0.35; }
-    }
-
-    /* Progress bar */
-    .progress-wrap {
-      height: 4px;
-      background: var(--border);
-      border-radius: 2px;
-      margin-top: 10px;
-      overflow: hidden;
-    }
-    .progress-fill {
-      height: 100%;
-      background: var(--blue);
-      border-radius: 2px;
-      transition: width 0.4s;
-    }
-
-    /* Summary */
-    #summary {
-      font-size: 13px;
-      color: var(--green);
-      font-family: var(--mono);
-      margin-top: 10px;
-      min-height: 18px;
-    }
-
-    /* Results table */
-    .results-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 12px;
-    }
-    .results-header h2 {
-      font-size: 14px;
-      font-weight: 600;
-      color: var(--muted);
-      letter-spacing: 0.5px;
-      text-transform: uppercase;
-    }
-    .copy-btns {
-      display: flex;
-      gap: 8px;
-    }
-    .copy-btns button {
-      font-size: 11px;
-      padding: 5px 12px;
-    }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 12px;
-    }
-    thead th {
-      text-align: left;
-      padding: 8px 12px;
-      border-bottom: 1px solid var(--border);
-      color: var(--muted);
-      font-family: var(--mono);
-      font-size: 11px;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-    tbody tr {
-      border-bottom: 1px solid var(--border);
-      transition: background 0.15s;
-    }
-    tbody tr:hover { background: rgba(255,255,255,0.03); }
-    tbody td {
-      padding: 10px 12px;
-      vertical-align: top;
-      font-family: var(--mono);
-    }
-    .td-domain {
-      color: var(--text);
-      min-width: 200px;
-      max-width: 260px;
-      word-break: break-all;
-    }
-    .td-status {
-      font-size: 10px;
-      margin-top: 3px;
-    }
-    .status-success  { color: var(--green); }
-    .status-error    { color: var(--red); }
-    .status-timeout  { color: var(--amber); }
-    .status-empty    { color: var(--muted); }
-    .status-skiplisted { color: #a78bfa; }  /* purple — skip-listed */
-
-    /* Skip-list panel */
-    .skiplist-panel {
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 12px 14px;
-      margin-top: 14px;
-      font-family: var(--mono);
-      font-size: 11px;
-    }
-    .skiplist-panel h3 {
-      font-size: 12px;
-      font-weight: 600;
-      color: var(--muted);
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      margin-bottom: 8px;
-    }
-    .skiplist-domain {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 3px 0;
-      border-bottom: 1px solid var(--border);
-      color: var(--text);
-    }
-    .skiplist-domain:last-child { border-bottom: none; }
-    .skiplist-remove {
-      background: none;
-      border: 1px solid var(--border);
-      color: var(--muted);
-      font-size: 10px;
-      padding: 2px 7px;
-      border-radius: 4px;
-      cursor: pointer;
-      font-family: var(--mono);
-    }
-    .skiplist-remove:hover { color: var(--red); border-color: var(--red); }
-    .skiplist-empty { color: var(--muted); font-style: italic; }
-    .status-pending  { color: var(--blue); }
-
-    .email-row {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin-bottom: 4px;
-    }
-    .email-addr {
-      color: var(--text);
-    }
-    .badge {
-      font-size: 9px;
-      font-weight: 700;
-      padding: 2px 5px;
-      border-radius: 4px;
-      letter-spacing: 0.4px;
-    }
-    .badge-high   { background: rgba(34,197,94,.18);  color: var(--green); }
-    .badge-medium { background: rgba(245,158,11,.18); color: var(--amber); }
-    .badge-low    { background: rgba(107,114,128,.2); color: var(--muted); }
-
-    .no-emails {
-      color: var(--muted);
-      font-style: italic;
-      font-size: 11px;
-    }
-
-    /* Empty state */
-    .empty-state {
-      text-align: center;
-      padding: 40px 20px;
-      color: var(--muted);
-    }
-    .empty-state .icon { font-size: 36px; margin-bottom: 10px; }
-
-    /* Divider */
-    .divider { height: 1px; background: var(--border); margin: 16px 0; }
-
-    /* Toast */
-    #toast {
-      position: fixed;
-      bottom: 24px;
-      right: 24px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 12px 18px;
-      font-size: 13px;
-      font-family: var(--mono);
-      transform: translateY(80px);
-      opacity: 0;
-      transition: all 0.25s;
-      z-index: 999;
-    }
-    #toast.show {
-      transform: translateY(0);
-      opacity: 1;
-    }
+    body{font-family:Arial,sans-serif;background:#0f172a;color:#e2e8f0;margin:20px}
+    .card{background:#111827;border:1px solid #334155;border-radius:8px;padding:16px;margin-bottom:12px}
+    textarea,input{width:100%;padding:10px;margin:6px 0 12px;border:1px solid #334155;border-radius:6px;background:#020617;color:#e2e8f0}
+    button{padding:9px 12px;border:none;border-radius:6px;background:#2563eb;color:#fff;margin-right:8px;cursor:pointer}
+    .row{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+    table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid #334155;padding:8px;text-align:left}
   </style>
 </head>
 <body>
-<div class="container">
-
-  <div class="header">
-    <div class="header-icon">📧</div>
-    <div>
-      <h1>Bulk Email Harvester</h1>
-      <span>Multi-strategy · Smart extraction · Live results</span>
-    </div>
-    <div id="modeBadge" style="margin-left:auto;font-size:11px;font-family:var(--mono);padding:5px 10px;border-radius:6px;background:var(--border);color:var(--muted);">
-      checking mode…
-    </div>
-  </div>
-
-  <!-- Input card -->
+  <h1>Bulk Email Harvester</h1>
   <div class="card">
-    <label>Website List <span style="font-weight:400;text-transform:none;letter-spacing:0">(one domain or URL per line)</span></label>
-    <textarea id="urlInput" placeholder="example.com&#10;https://anothersite.org&#10;mycompany.io/contact"></textarea>
+    <label>Websites (one per line)</label>
+    <textarea id="urls" rows="8" placeholder="example.com\nsite.org"></textarea>
 
-    <div class="divider"></div>
+    <label>Upload .txt list</label>
+    <input type="file" id="file" accept=".txt" />
 
-    <label id="excludeLabel">Exclude Rules</label>
-    <textarea id="excludeInput" placeholder="# Exact email: noreply@example.com&#10;# Whole domain: @example.com&#10;# Keyword: noreply&#10;# TLD filter: @.png"></textarea>
-
-    <div class="settings-row">
-      <div class="setting-item">
-        <label>Hard Timeout (s)</label>
-        <input type="number" id="hardTimeout" value="45" min="10" max="120" />
+    <div class="row">
+      <div>
+        <label>Hard timeout (sec)</label>
+        <input id="timeout" type="number" value="45" min="10" />
       </div>
-      <div class="setting-item">
-        <label>Secondary Pages</label>
-        <input type="number" id="secPages" value="3" min="0" max="10" />
-      </div>
-      <div class="setting-item">
-        <label>Email Cap / Domain</label>
-        <input type="number" id="emailCap" value="20" min="1" max="100" />
+      <div>
+        <label>Max contact pages</label>
+        <input id="maxPages" type="number" value="5" min="1" />
       </div>
     </div>
+
+    <label>Exclusion rules (optional)</label>
+    <textarea id="rules" rows="5" placeholder="noreply@site.com\n@example.com\nno-reply"></textarea>
+
+    <button onclick="startRun()">Start</button>
+    <button onclick="callApi('/api/skip')">Skip Current</button>
+    <button onclick="callApi('/api/stop')">Stop</button>
+    <button onclick="callApi('/api/continue')">Continue</button>
+    <button onclick="callApi('/api/reset')">Reset</button>
   </div>
 
-  <!-- Controls card -->
   <div class="card">
-    <div class="btn-row">
-      <button class="btn-blue"   id="btnStart">▶ Start New</button>
-      <button class="btn-purple" id="btnContinue" disabled>⟳ Continue</button>
-      <button class="btn-amber"  id="btnStop"     disabled>⏸ Stop</button>
-      <button class="btn-red"    id="btnForce"    disabled>⏹ Force Stop</button>
-      <button class="btn-gray"   id="btnSkip"     disabled>⏭ Skip URL</button>
-      <button class="btn-gray"   id="btnClear">✕ Clear</button>
-    </div>
-
-    <div class="status-bar">
-      <span class="dot dot-idle" id="dot"></span>
-      <span id="statusText">Idle — paste domains above and press Start New</span>
-    </div>
-    <div class="progress-wrap">
-      <div class="progress-fill" id="progressFill" style="width:0%"></div>
-    </div>
-    <div id="summary"></div>
+    <h3>Status</h3>
+    <pre id="status">Idle</pre>
+    <table>
+      <thead><tr><th>Domain</th><th>Emails</th><th>Status</th><th>Error</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
   </div>
-
-  <!-- Skip-list panel -->
-  <div class="card" id="skiplistCard" style="display:none">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-      <span style="font-size:13px;font-weight:600">🚫 Skip List <span id="skiplistCount" style="color:var(--muted);font-family:var(--mono);font-size:11px"></span></span>
-      <button class="btn-gray" id="btnClearSkiplist" style="font-size:11px;padding:4px 10px">✕ Clear All</button>
-    </div>
-    <div style="font-size:11px;color:var(--muted);margin-bottom:8px;font-family:var(--mono)">
-      These domains timed out and will be auto-skipped on next run. Click ✕ next to any to retry it.
-    </div>
-    <div id="skiplistDomains"></div>
-  </div>
-
-  <!-- Results card -->
-  <div class="card">    <div class="results-header">
-      <h2>Results</h2>
-      <div class="copy-btns">
-        <button class="btn-teal" id="btnCopyTable"  disabled>⎘ Copy Table</button>
-        <button class="btn-gray" id="btnCopyEmails" disabled>📋 Copy Emails</button>
-      </div>
-    </div>
-
-    <div id="resultsWrap">
-      <div class="empty-state">
-        <div class="icon">🔍</div>
-        <div>Results will appear here as each domain is processed</div>
-      </div>
-    </div>
-  </div>
-
-</div><!-- /container -->
-
-<div id="toast"></div>
 
 <script>
-// -----------------------------------------------------------------------
-// State
-// -----------------------------------------------------------------------
-let pollTimer = null;
-let lastResultCount = 0;
-let allResults = [];
+let uploadedLines = [];
+let timer = null;
 
-// -----------------------------------------------------------------------
-// DOM refs
-// -----------------------------------------------------------------------
-const $  = id => document.getElementById(id);
-const urlInput    = $('urlInput');
-const excludeInput= $('excludeInput');
-const hardTimeout = $('hardTimeout');
-const btnStart    = $('btnStart');
-const btnContinue = $('btnContinue');
-const btnStop     = $('btnStop');
-const btnForce    = $('btnForce');
-const btnSkip     = $('btnSkip');
-const btnClear    = $('btnClear');
-const btnCopyT    = $('btnCopyTable');
-const btnCopyE    = $('btnCopyEmails');
-const dot         = $('dot');
-const statusText  = $('statusText');
-const progressFill= $('progressFill');
-const summaryEl   = $('summary');
-const resultsWrap = $('resultsWrap');
+document.getElementById('file').addEventListener('change', async (e) => {
+  const f = e.target.files[0];
+  if (!f) { uploadedLines = []; return; }
+  const text = await f.text();
+  uploadedLines = text.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
+});
 
-// -----------------------------------------------------------------------
-// Exclusion rule counter
-// -----------------------------------------------------------------------
-excludeInput.addEventListener('input', updateExcludeLabel);
-function updateExcludeLabel() {
-  const count = excludeInput.value.split('\n')
-    .map(r => r.trim())
-    .filter(r => r && !r.startsWith('#')).length;
-  $('excludeLabel').textContent = `Exclude Rules${count ? ' (' + count + ' active)' : ''}`;
+async function callApi(path, body={}) {
+  const r = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  return r.json();
 }
 
-// -----------------------------------------------------------------------
-// Buttons
-// -----------------------------------------------------------------------
-btnStart.addEventListener('click', async () => {
-  const rawLines = urlInput.value.split('\n').map(s => s.trim()).filter(Boolean);
-  if (!rawLines.length) { toast('Paste at least one domain'); return; }
+async function startRun(){
+  const typed = document.getElementById('urls').value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
+  const urls = [...typed, ...uploadedLines];
+  const payload = {
+    urls,
+    exclusion_rules: document.getElementById('rules').value,
+    hard_timeout: Number(document.getElementById('timeout').value || 45),
+    max_pages: Number(document.getElementById('maxPages').value || 5),
+  };
+  const res = await callApi('/api/start', payload);
+  if (!res.ok) { alert(res.error || 'Start failed'); return; }
+  if (timer) clearInterval(timer);
+  timer = setInterval(refreshStatus, 1000);
+}
 
-  setRunningUI(true);
-  allResults = [];
-  lastResultCount = 0;
-  renderTable([]);
-  summaryEl.textContent = '';
+async function refreshStatus(){
+  const r = await fetch('/api/status');
+  const data = await r.json();
+  document.getElementById('status').textContent = JSON.stringify({
+    status: data.status,
+    current_domain: data.current_domain,
+    progress: `${Math.min(data.current_index+1, data.total||0)}/${data.total||0}`,
+    playwright: data.playwright
+  }, null, 2);
 
-  const resp = await api('/api/start', {
-    urls: rawLines,
-    exclusion_rules: excludeInput.value,
-    hard_timeout: parseInt(hardTimeout.value) || 45,
+  const tbody = document.getElementById('rows');
+  tbody.innerHTML = '';
+  (data.results || []).forEach(row => {
+    const tr = document.createElement('tr');
+    const emails = (row.emails || []).map(e => e.email || e).join(', ');
+    tr.innerHTML = `<td>${row.url || ''}</td><td>${emails || '(none)'}</td><td>${row.status || ''}</td><td>${row.error || ''}</td>`;
+    tbody.appendChild(tr);
   });
 
-  if (!resp.ok) { toast(resp.error || 'Start failed'); setRunningUI(false); return; }
-  if (resp.playwright) {
-    toast('🟢 Live browser window will open for each site');
-  } else {
-    toast('🟡 Running in HTTP-only mode. Install playwright for live browser.');
-  }
-  startPolling();
-});
-
-btnContinue.addEventListener('click', async () => {
-  const resp = await api('/api/continue', {});
-  if (!resp.ok) { toast(resp.error || 'Continue failed'); return; }
-  setRunningUI(true);
-  startPolling();
-});
-
-btnStop.addEventListener('click', () => api('/api/stop', {}));
-
-btnForce.addEventListener('click', () => {
-  api('/api/force_stop', {});
-  setRunningUI(false, 'paused');
-});
-
-btnSkip.addEventListener('click', () => api('/api/skip', {}));
-
-btnClear.addEventListener('click', async () => {
-  await api('/api/reset', {});
-  stopPolling();
-  urlInput.value = '';
-  allResults = [];
-  renderTable([]);
-  summaryEl.textContent = '';
-  setDot('idle');
-  statusText.textContent = 'Idle — paste domains above and press Start New';
-  progressFill.style.width = '0%';
-  setRunningUI(false);
-});
-
-btnCopyT.addEventListener('click', copyTable);
-btnCopyE.addEventListener('click', copyEmails);
-
-// -----------------------------------------------------------------------
-// Polling
-// -----------------------------------------------------------------------
-function startPolling() {
-  stopPolling();
-  pollTimer = setInterval(fetchStatus, 1200);
-  fetchStatus();
-}
-function stopPolling() {
-  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-}
-
-async function fetchStatus() {
-  let data;
-  try { data = await (await fetch('/api/status')).json(); }
-  catch(e) { return; }
-
-  const { status, current_index, total, current_domain, results } = data;
-
-  allResults = results || [];
-
-  // Update progress
-  const pct = total > 0 ? Math.round((current_index / total) * 100) : 0;
-  progressFill.style.width = pct + '%';
-
-  // Status text
-  if (status === 'running') {
-    setDot('run');
-    const dom = current_domain ? current_domain.replace(/^https?:\/\//, '') : '…';
-    statusText.textContent = `Processing ${current_index + 1} / ${total}: ${dom}`;
-  } else if (status === 'done') {
-    setDot('done');
-    progressFill.style.width = '100%';
-    const emailCount = allResults.reduce((n, r) => n + (r.emails ? r.emails.length : 0), 0);
-    const domainsWithEmails = allResults.filter(r => r.emails && r.emails.length > 0).length;
-    statusText.textContent = `Done — ${total} sites processed`;
-    summaryEl.textContent = `✓ ${emailCount} emails found across ${domainsWithEmails} domains`;
-    stopPolling();
-    setRunningUI(false, 'done');
-    loadSkipList();  // refresh skip list — may have new timeouts added
-  } else if (status === 'paused') {
-    setDot('warn');
-    statusText.textContent = `Paused at ${current_index} / ${total} — press Continue to resume`;
-    stopPolling();
-    setRunningUI(false, 'paused');
-  } else {
-    setDot('idle');
-    statusText.textContent = 'Idle';
-    stopPolling();
-    setRunningUI(false);
-  }
-
-  renderTable(allResults);
-  const hasResults = allResults.length > 0;
-  btnCopyT.disabled = !hasResults;
-  btnCopyE.disabled = !hasResults;
-}
-
-// -----------------------------------------------------------------------
-// Render table
-// -----------------------------------------------------------------------
-function renderTable(results) {
-  if (!results.length) {
-    resultsWrap.innerHTML = `<div class="empty-state"><div class="icon">🔍</div><div>Results will appear here</div></div>`;
-    return;
-  }
-
-  let html = `<table>
-    <thead><tr>
-      <th>Domain</th>
-      <th>Emails Found</th>
-    </tr></thead>
-    <tbody>`;
-
-  for (const r of results) {
-    const domainDisplay = (r.url || '').replace(/^https?:\/\//, '');
-    let statusClass = 'status-pending';
-    let statusLabel = 'processing…';
-
-    if (r.status === 'success' || r.status === 'no_emails') {
-      statusClass = r.emails && r.emails.length ? 'status-success' : 'status-empty';
-      statusLabel = r.emails && r.emails.length ? `[success] ${r.emails.length} found` : '[no emails]';
-    } else if (r.status === 'skipped_timeout') {
-      statusClass = 'status-timeout';
-      statusLabel = `[timeout] ${r.error || ''}`;
-    } else if (r.status === 'skipped_error') {
-      statusClass = 'status-error';
-      statusLabel = `[error] ${r.error || ''}`;
-    } else if (r.status === 'no_content') {
-      statusClass = 'status-empty';
-      statusLabel = '[no content]';
-    } else if (r.status === 'bot-blocked') {
-      statusClass = 'status-skiplisted';
-      statusLabel = `[bot-blocked] ${r.error || ''}`;
-    } else if (r.status === 'skip-listed') {
-      statusClass = 'status-skiplisted';
-      statusLabel = '[skip-listed] skipped — domain in skip_domains.txt';
-    }
-
-    let emailsHtml = '';
-    if (r.emails && r.emails.length) {
-      emailsHtml = r.emails.map(e => {
-        const badge = `<span class="badge badge-${e.confidence}">${e.confidence.toUpperCase()}</span>`;
-        return `<div class="email-row">${badge}<span class="email-addr">${escHtml(e.email)}</span></div>`;
-      }).join('');
-    } else if (r.status && r.status !== 'pending') {
-      emailsHtml = `<span class="no-emails">No emails found</span>`;
-    }
-
-    html += `<tr>
-      <td class="td-domain">
-        <div>${escHtml(domainDisplay)}</div>
-        <div class="td-status ${statusClass}">${escHtml(statusLabel)}</div>
-      </td>
-      <td>${emailsHtml}</td>
-    </tr>`;
-  }
-
-  html += '</tbody></table>';
-  resultsWrap.innerHTML = html;
-}
-
-// -----------------------------------------------------------------------
-// Copy helpers
-// -----------------------------------------------------------------------
-function copyTable() {
-  const rows = allResults.map(r => {
-    const domain = (r.url || '').replace(/^https?:\/\//, '');
-    const emails = r.emails ? r.emails.map(e => e.email).join(', ') : '';
-    const err = r.error || r.status || '';
-    return `${domain}\t${emails}\t${err}`;
-  });
-  const tsv = 'Domain\tEmails\tStatus\n' + rows.join('\n');
-  navigator.clipboard.writeText(tsv).then(() => toast('Table copied as TSV'));
-}
-
-function copyEmails() {
-  const all = [];
-  for (const r of allResults) {
-    if (r.emails) r.emails.forEach(e => { if (!all.includes(e.email)) all.push(e.email); });
-  }
-  navigator.clipboard.writeText(all.join('\n')).then(() => toast(`${all.length} emails copied`));
-}
-
-// -----------------------------------------------------------------------
-// UI helpers
-// -----------------------------------------------------------------------
-function setRunningUI(running, state) {
-  btnStart.disabled    =  running;
-  btnContinue.disabled =  running || state !== 'paused';
-  btnStop.disabled     = !running;
-  btnForce.disabled    = !running;
-  btnSkip.disabled     = !running;
-}
-
-function setDot(state) {
-  dot.className = 'dot';
-  if (state === 'run')   dot.classList.add('dot-run');
-  else if (state === 'done')  dot.classList.add('dot-done');
-  else if (state === 'error') dot.classList.add('dot-error');
-  else if (state === 'warn')  dot.classList.add('dot-warn');
-  else dot.classList.add('dot-idle');
-}
-
-function escHtml(s) {
-  return String(s || '')
-    .replace(/&/g,'&amp;')
-    .replace(/</g,'&lt;')
-    .replace(/>/g,'&gt;');
-}
-
-// -----------------------------------------------------------------------
-// API helper
-// -----------------------------------------------------------------------
-async function api(path, body) {
-  try {
-    const r = await fetch(path, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-    return await r.json();
-  } catch(e) {
-    return { ok: false, error: e.message };
+  if (data.status === 'done' || data.status === 'paused' || data.status === 'idle') {
+    clearInterval(timer);
+    timer = null;
   }
 }
-
-// -----------------------------------------------------------------------
-// Toast
-// -----------------------------------------------------------------------
-let toastTimer = null;
-function toast(msg) {
-  const el = $('toast');
-  el.textContent = msg;
-  el.classList.add('show');
-  if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove('show'), 2800);
-}
-
-// -----------------------------------------------------------------------
-// Skip-list panel
-// -----------------------------------------------------------------------
-async function loadSkipList() {
-  try {
-    const data = await (await fetch('/api/skiplist')).json();
-    const domains = data.domains || [];
-    const card = $('skiplistCard');
-    const wrap = $('skiplistDomains');
-    const count = $('skiplistCount');
-
-    if (domains.length === 0) {
-      card.style.display = 'none';
-      return;
-    }
-
-    card.style.display = '';
-    count.textContent = `(${domains.length} domain${domains.length !== 1 ? 's' : ''})`;
-
-    wrap.innerHTML = domains.map(d => `
-      <div class="skiplist-domain">
-        <span>${escHtml(d)}</span>
-        <button class="skiplist-remove" onclick="removeFromSkipList('${escHtml(d)}')">✕ retry</button>
-      </div>
-    `).join('');
-  } catch(e) {}
-}
-
-async function removeFromSkipList(domain) {
-  await api('/api/skiplist/remove', { domain });
-  await loadSkipList();
-  toast(`Removed ${domain} from skip list`);
-}
-
-$('btnClearSkiplist').addEventListener('click', async () => {
-  await api('/api/skiplist/clear', {});
-  await loadSkipList();
-  toast('Skip list cleared');
-});
-
-// -----------------------------------------------------------------------
-// Init: restore state on load
-// -----------------------------------------------------------------------
-(async () => {
-  updateExcludeLabel();
-  loadSkipList();  // show skip list on page load
-  const data = await (await fetch('/api/status')).json();
-
-  // Show playwright mode badge
-  const badge = $('modeBadge');
-  if (data.playwright) {
-    badge.textContent = '🟢 Live Browser (Playwright)';
-    badge.style.background = 'rgba(34,197,94,.15)';
-    badge.style.color = 'var(--green)';
-  } else {
-    badge.textContent = '🟡 HTTP only (no Playwright)';
-    badge.style.background = 'rgba(245,158,11,.15)';
-    badge.style.color = 'var(--amber)';
-  }
-  if (data.status === 'running') {
-    setRunningUI(true);
-    setDot('run');
-    statusText.textContent = 'Resuming polling…';
-    startPolling();
-  } else if (data.status === 'paused') {
-    allResults = data.results || [];
-    renderTable(allResults);
-    setDot('warn');
-    statusText.textContent = `Paused — press Continue to resume`;
-    setRunningUI(false, 'paused');
-    btnCopyT.disabled = allResults.length === 0;
-    btnCopyE.disabled = allResults.length === 0;
-  } else if (data.results && data.results.length) {
-    allResults = data.results;
-    renderTable(allResults);
-    setDot('done');
-    statusText.textContent = 'Previous run loaded';
-    btnCopyT.disabled = false;
-    btnCopyE.disabled = false;
-  }
-})();
 </script>
 </body>
 </html>
