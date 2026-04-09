@@ -1,15 +1,6 @@
-# Email Scraper Web App
+# Bulk Email Harvester (Web UI + Hard Timeout Worker)
 
-A Flask-based web dashboard that lets you upload website lists and scrape emails end-to-end from the browser UI.
-
-## Features
-
-- Upload `.txt` input files and/or paste websites.
-- Persistent queue file (`pending.txt`) with resume behavior.
-- `--continue` equivalent toggle in UI to retry pending sites.
-- Per-site timeout, max pages, workers, exclusions.
-- Each website/page can be opened in a **headed browser** (Playwright, non-headless) while scraping.
-- Output to `output.csv`, failures logged to `errors.log`.
+This app provides a browser UI for scraping emails from websites while enforcing a strict per-site hard timeout.
 
 ## Run
 
@@ -20,9 +11,11 @@ python app.py
 
 Open `http://127.0.0.1:5000`.
 
-## Queue behavior
+## Key behavior
 
-- Site is added to `pending.txt` before processing.
-- On success, it is removed.
-- On timeout/error, it remains.
-- Next run skips pending sites unless **Continue pending** is enabled.
+- Hard timeout is enforced with `threading.Timer` per URL.
+- On timeout/skip/stop, the current browser page is force-closed.
+- Timed-out domains are persisted in `skip_domains.txt` and auto-skipped next run.
+- Successful domains are removed from `skip_domains.txt`.
+- Secondary contact/about/support pages are discovered and scraped (`max_pages` from UI).
+- UI supports direct paste + `.txt` upload.
