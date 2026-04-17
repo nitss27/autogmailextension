@@ -47,6 +47,7 @@ textarea {
 
 .actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin: 12px 0;
 }
@@ -64,8 +65,27 @@ button {
   color: white;
 }
 
+#continueBtn {
+  background: #7c3aed;
+  color: white;
+}
+
 #copyBtn {
   background: #0f766e;
+  color: white;
+}
+
+#clearListBtn {
+  background: #e5e7eb;
+  color: #1f2937;
+}
+
+.smallInput {
+  height: 36px;
+}
+
+#stopBtn {
+  background: #dc2626;
   color: white;
 }
 
