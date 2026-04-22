@@ -1,25 +1,33 @@
 (function () {
   const SELECTORS = {
-    composerInput: 'div[contenteditable="true"]',
+    composerInput: [
+      'div[contenteditable="true"][aria-label="Enter a prompt for Gemini"]',
+      'rich-textarea .ql-editor[contenteditable="true"]',
+      'div[contenteditable="true"]'
+    ],
     sendButton: [
-      'button[aria-label*="Send message"]',
-      'button[aria-label*="Send"]'
+      'button[aria-label="Send message"]:not([aria-disabled="true"])',
+      'button.send-button[aria-label*="Send"]:not([aria-disabled="true"])',
+      'button[aria-label*="Send"]:not([aria-disabled="true"])'
     ],
     stopButton: [
       'button[aria-label*="Stop"]',
       'button[mattooltip*="Stop"]'
     ],
-    attachToggle: [
-      'button[aria-label*="Add files"]',
-      'button[aria-label*="Attach"]',
-      'span.mat-mdc-button-touch-target'
+    plusButton: [
+      'button[aria-label="Open upload file menu"]',
+      'uploader button.upload-card-button',
+      'button[aria-controls="upload-file-menu"]'
     ],
     uploadMenuButton: [
-      '[data-test-id="local-images-files-uploader-button"]',
-      '[data-test-id="uploader-images-files-button-advanced"] button',
-      'images-files-uploader button'
+      'button[data-test-id="local-images-files-uploader-button"]',
+      'button[aria-label*="Upload files"]',
+      'images-files-uploader button[data-test-id="local-images-files-uploader-button"]'
     ],
-    hiddenUploadTrigger: '.hidden-local-file-image-selector-button',
+    hiddenImageUploadButton: [
+      'button[data-test-id="hidden-local-image-upload-button"]',
+      'button.hidden-local-upload-button[xapfileselectortrigger]'
+    ],
     fileInput: 'input[type="file"]',
     messageContainers: '[class*="container_b7e1cb"], [class*="messageContent"]',
     downloadLinks: 'a[aria-label="Download"]'
@@ -39,7 +47,7 @@
     for (const selector of arr) {
       const nodes = document.querySelectorAll(selector);
       for (const node of nodes) {
-        if (isVisible(node) || selector === 'span.mat-mdc-button-touch-target') {
+        if (isVisible(node)) {
           return node;
         }
       }
@@ -55,6 +63,12 @@
       await delay(120);
     }
     throw new Error(`Timeout waiting for: ${Array.isArray(selectors) ? selectors.join(' | ') : selectors}`);
+  }
+
+  function clickElement(el) {
+    el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+    el.click();
   }
 
   async function clearAndType(text) {
@@ -76,21 +90,27 @@
     return new File([bytes], name || 'image.png', { type: mime });
   }
 
-  async function setSingleFile(fileLike) {
+  async function openUploadMenu() {
+    const plusBtn = await waitForSelector(SELECTORS.plusButton, 12000);
+    clickElement(plusBtn);
+    await delay(400);
+
+    const uploadBtn = await waitForSelector(SELECTORS.uploadMenuButton, 12000);
+    clickElement(uploadBtn);
+    await delay(500);
+
+    const hiddenUploadTrigger = findFirstVisible(SELECTORS.hiddenImageUploadButton);
+    if (hiddenUploadTrigger) {
+      clickElement(hiddenUploadTrigger);
+    }
+  }
+
+  async function attachFile(fileLike) {
     const file = fileLike instanceof File
       ? fileLike
       : dataUrlToFile(fileLike.dataUrl, fileLike.name, fileLike.type);
 
-    const attachTarget = await waitForSelector(SELECTORS.attachToggle, 12000);
-    attachTarget.click();
-    await delay(400);
-
-    const uploadBtn = await waitForSelector(SELECTORS.uploadMenuButton, 12000);
-    uploadBtn.click();
-    await delay(500);
-
-    const hiddenTrigger = document.querySelector(SELECTORS.hiddenUploadTrigger);
-    if (hiddenTrigger) hiddenTrigger.click();
+    await openUploadMenu();
 
     const input = await waitForSelector(SELECTORS.fileInput, 15000);
     const dt = new DataTransfer();
@@ -104,8 +124,7 @@
 
   async function sendCurrentPromptAndWait() {
     const sendBtn = await waitForSelector(SELECTORS.sendButton, 10000);
-    if (sendBtn.disabled) throw new Error('Send button is disabled.');
-    sendBtn.click();
+    clickElement(sendBtn);
 
     await delay(1800);
     while (findFirstVisible(SELECTORS.stopButton)) {
@@ -125,7 +144,7 @@
       const fileName = file?.name || `image_${i + 1}.png`;
 
       console.log(`\n🟩 Item ${i + 1}/${files.length}: ${fileName}`);
-      await setSingleFile(file);
+      await attachFile(file);
       await clearAndType(prompt);
       await delay(500);
       await sendCurrentPromptAndWait();

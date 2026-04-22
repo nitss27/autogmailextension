@@ -2,7 +2,7 @@
 
 This extension automates batch image-editing flows in Gemini:
 
-1. Clicks the attach trigger (`span.mat-mdc-button-touch-target`).
+1. Clicks the plus upload button (`aria-label="Open upload file menu"`).
 2. Clicks **Upload files** (`data-test-id="local-images-files-uploader-button"`).
 3. Injects one image file.
 4. Types the matching prompt.
@@ -26,3 +26,8 @@ It also includes an optional **Download Outputs by Prompt Match** action modeled
 4. Click **Run Batch Edit**.
 
 If only one prompt is provided, it is reused for every image.
+
+
+## Stability notes
+
+The content script targets stable attributes first (e.g. `aria-label`, `data-test-id`) and avoids relying on changing Angular class hashes. This makes the flow resilient across Gemini refreshes.
