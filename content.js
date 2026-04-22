@@ -28,6 +28,7 @@
       'button[data-test-id="hidden-local-image-upload-button"]',
       'button.hidden-local-upload-button[xapfileselectortrigger]'
     ],
+    dropzone: '[xapfileselectordropzone]',
     fileInput: 'input[type="file"]',
     messageContainers: '[class*="container_b7e1cb"], [class*="messageContent"]',
     downloadLinks: 'a[aria-label="Download"]'
@@ -40,6 +41,21 @@
     const style = window.getComputedStyle(el);
     const rect = el.getBoundingClientRect();
     return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
+  }
+
+  function queryDeep(selector, root = document) {
+    const direct = root.querySelector(selector);
+    if (direct) return direct;
+
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      if (node.shadowRoot) {
+        const nested = queryDeep(selector, node.shadowRoot);
+        if (nested) return nested;
+      }
+    }
+    return null;
   }
 
   function findFirstVisible(selectors) {
@@ -63,6 +79,16 @@
       await delay(120);
     }
     throw new Error(`Timeout waiting for: ${Array.isArray(selectors) ? selectors.join(' | ') : selectors}`);
+  }
+
+  async function waitForFileInput(timeoutMs = 7000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const input = queryDeep(SELECTORS.fileInput);
+      if (input) return input;
+      await delay(100);
+    }
+    return null;
   }
 
   function clickElement(el) {
@@ -90,6 +116,24 @@
     return new File([bytes], name || 'image.png', { type: mime });
   }
 
+  function uploadViaDropzone(file) {
+    const zone = findFirstVisible(SELECTORS.dropzone);
+    if (!zone) return false;
+
+    const dt = new DataTransfer();
+    dt.items.add(file);
+
+    ['dragenter', 'dragover', 'drop'].forEach((type) => {
+      const event = new DragEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer: dt
+      });
+      zone.dispatchEvent(event);
+    });
+    return true;
+  }
+
   async function openUploadMenu() {
     const plusBtn = await waitForSelector(SELECTORS.plusButton, 12000);
     clickElement(plusBtn);
@@ -112,14 +156,24 @@
 
     await openUploadMenu();
 
-    const input = await waitForSelector(SELECTORS.fileInput, 15000);
-    const dt = new DataTransfer();
-    dt.items.add(file);
-    input.files = dt.files;
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    input.dispatchEvent(new Event('change', { bubbles: true }));
+    const input = await waitForFileInput(7000);
+    if (input) {
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      input.files = dt.files;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      await delay(1800);
+      return;
+    }
 
-    await delay(1800);
+    const dropped = uploadViaDropzone(file);
+    if (dropped) {
+      await delay(1800);
+      return;
+    }
+
+    throw new Error('Could not find file input or dropzone after clicking Upload files.');
   }
 
   async function sendCurrentPromptAndWait() {
@@ -143,7 +197,8 @@
       const prompt = prompts[i] || prompts[prompts.length - 1];
       const fileName = file?.name || `image_${i + 1}.png`;
 
-      console.log(`\n🟩 Item ${i + 1}/${files.length}: ${fileName}`);
+      console.log(`
+🟩 Item ${i + 1}/${files.length}: ${fileName}`);
       await attachFile(file);
       await clearAndType(prompt);
       await delay(500);

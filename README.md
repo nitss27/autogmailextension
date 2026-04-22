@@ -30,4 +30,4 @@ If only one prompt is provided, it is reused for every image.
 
 ## Stability notes
 
-The content script targets stable attributes first (e.g. `aria-label`, `data-test-id`) and avoids relying on changing Angular class hashes. This makes the flow resilient across Gemini refreshes.
+The content script targets stable attributes first (e.g. `aria-label`, `data-test-id`) and avoids relying on changing Angular class hashes. This makes the flow resilient across Gemini refreshes. If Gemini hides native file inputs, the extension also falls back to dropzone-based upload events.
