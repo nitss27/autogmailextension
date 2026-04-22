@@ -1,0 +1,28 @@
+# Gemini Image Edit Batch Processor (Chrome Extension)
+
+This extension automates batch image-editing flows in Gemini:
+
+1. Clicks the attach trigger (`span.mat-mdc-button-touch-target`).
+2. Clicks **Upload files** (`data-test-id="local-images-files-uploader-button"`).
+3. Injects one image file.
+4. Types the matching prompt.
+5. Sends and waits for Gemini to finish.
+6. Repeats for all images.
+
+It also includes an optional **Download Outputs by Prompt Match** action modeled on your reference script.
+
+## Install
+
+1. Open `chrome://extensions`.
+2. Enable **Developer mode**.
+3. Click **Load unpacked**.
+4. Select this folder.
+
+## Use
+
+1. Open `https://gemini.google.com/` and log in.
+2. Open extension popup.
+3. Select images and enter prompts (one per line).
+4. Click **Run Batch Edit**.
+
+If only one prompt is provided, it is reused for every image.
