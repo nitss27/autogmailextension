@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Gemini Image Edit Batch Processor",
+  "description": "Batch upload images to Gemini, send edit prompts, and optionally download outputs.",
+  "version": "1.0.0",
+  "permissions": ["activeTab", "scripting", "storage", "downloads"],
+  "host_permissions": ["https://gemini.google.com/*"],
+  "action": {
+    "default_title": "Image Edit Batch",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://gemini.google.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

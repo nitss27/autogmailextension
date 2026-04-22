@@ -1,0 +1,35 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Image Edit Batch</title>
+    <style>
+      body { font-family: Arial, sans-serif; width: 360px; margin: 12px; }
+      h1 { font-size: 16px; margin: 0 0 10px; }
+      .hint { color: #444; font-size: 12px; margin: 6px 0; }
+      textarea { width: 100%; min-height: 110px; box-sizing: border-box; }
+      input[type='number'] { width: 100%; box-sizing: border-box; }
+      button { width: 100%; margin-top: 10px; padding: 8px; }
+      #status { margin-top: 8px; font-size: 12px; white-space: pre-wrap; }
+      label { display: block; margin-top: 8px; font-size: 13px; }
+    </style>
+  </head>
+  <body>
+    <h1>Gemini Image Edit Batch</h1>
+    <label>Images (multiple)</label>
+    <input id="images" type="file" accept="image/*" multiple />
+
+    <label>Prompts (one per line)</label>
+    <textarea id="prompts" placeholder="e.g.\nmake this cinematic\nremove background"></textarea>
+    <div class="hint">If only one prompt is provided, it will be reused for every image.</div>
+
+    <label>Delay between items (ms)</label>
+    <input id="delay" type="number" min="500" value="1500" />
+
+    <button id="run">Run Batch Edit</button>
+    <button id="download" type="button">Download Outputs by Prompt Match</button>
+
+    <div id="status"></div>
+    <script src="popup.js"></script>
+  </body>
+</html>
