@@ -23,7 +23,8 @@ It also includes an optional **Download Outputs by Prompt Match** action modeled
 1. Open `https://gemini.google.com/` and log in.
 2. Open extension popup.
 3. Select images and enter prompts (one per line).
-4. Click **Run Batch Edit**.
+4. Enter prompts with one prompt per line (use exactly one prompt for each image, or one prompt total to reuse for all).
+5. Click **Run Batch Edit** (it now auto-downloads matched generated images after all edits complete).
 
 If only one prompt is provided, it is reused for every image.
 

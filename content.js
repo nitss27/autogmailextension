@@ -30,6 +30,10 @@
     ],
     dropzone: '[xapfileselectordropzone]',
     fileInput: 'input[type="file"]',
+    queryBlock: 'user-query-content.user-query-container',
+    queryText: '.query-text-line',
+    responseBlock: 'structured-content-container',
+    generatedDownloadButton: 'button[data-test-id="download-generated-image-button"]',
     messageContainers: '[class*="container_b7e1cb"], [class*="messageContent"]',
     downloadLinks: 'a[aria-label="Download"]'
   };
@@ -63,9 +67,7 @@
     for (const selector of arr) {
       const nodes = document.querySelectorAll(selector);
       for (const node of nodes) {
-        if (isVisible(node)) {
-          return node;
-        }
+        if (isVisible(node)) return node;
       }
     }
     return null;
@@ -119,41 +121,37 @@
   function uploadViaDropzone(file) {
     const zone = findFirstVisible(SELECTORS.dropzone);
     if (!zone) return false;
-
     const dt = new DataTransfer();
     dt.items.add(file);
 
     ['dragenter', 'dragover', 'drop'].forEach((type) => {
-      const event = new DragEvent(type, {
-        bubbles: true,
-        cancelable: true,
-        dataTransfer: dt
-      });
+      const event = new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt });
       zone.dispatchEvent(event);
     });
     return true;
   }
 
   async function openUploadMenu() {
-    const plusBtn = await waitForSelector(SELECTORS.plusButton, 12000);
-    clickElement(plusBtn);
-    await delay(400);
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      const plusBtn = await waitForSelector(SELECTORS.plusButton, 12000);
+      clickElement(plusBtn);
+      await delay(450);
 
-    const uploadBtn = await waitForSelector(SELECTORS.uploadMenuButton, 12000);
-    clickElement(uploadBtn);
-    await delay(500);
-
-    const hiddenUploadTrigger = findFirstVisible(SELECTORS.hiddenImageUploadButton);
-    if (hiddenUploadTrigger) {
-      clickElement(hiddenUploadTrigger);
+      const uploadBtn = findFirstVisible(SELECTORS.uploadMenuButton);
+      if (uploadBtn) {
+        clickElement(uploadBtn);
+        await delay(500);
+        const hiddenUploadTrigger = findFirstVisible(SELECTORS.hiddenImageUploadButton);
+        if (hiddenUploadTrigger) clickElement(hiddenUploadTrigger);
+        return;
+      }
+      await delay(300);
     }
+    throw new Error('Upload files button did not appear after clicking plus button.');
   }
 
   async function attachFile(fileLike) {
-    const file = fileLike instanceof File
-      ? fileLike
-      : dataUrlToFile(fileLike.dataUrl, fileLike.name, fileLike.type);
-
+    const file = fileLike instanceof File ? fileLike : dataUrlToFile(fileLike.dataUrl, fileLike.name, fileLike.type);
     await openUploadMenu();
 
     const input = await waitForFileInput(7000);
@@ -167,8 +165,7 @@
       return;
     }
 
-    const dropped = uploadViaDropzone(file);
-    if (dropped) {
+    if (uploadViaDropzone(file)) {
       await delay(1800);
       return;
     }
@@ -179,14 +176,40 @@
   async function sendCurrentPromptAndWait() {
     const sendBtn = await waitForSelector(SELECTORS.sendButton, 10000);
     clickElement(sendBtn);
-
     await delay(1800);
-    while (findFirstVisible(SELECTORS.stopButton)) {
-      await delay(1000);
-    }
+    while (findFirstVisible(SELECTORS.stopButton)) await delay(1000);
   }
 
-  async function runBatch(files, prompts, delayMs) {
+  function normalize(text) {
+    return (text || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  }
+
+  async function autoDownloadGeneratedByPrompt(prompts) {
+    const normalizedPrompts = prompts.map(normalize);
+    const queryBlocks = Array.from(document.querySelectorAll(SELECTORS.queryBlock));
+    let clicked = 0;
+
+    for (const queryBlock of queryBlocks) {
+      const line = queryBlock.querySelector(SELECTORS.queryText);
+      const qText = normalize(line?.textContent || '');
+      if (!qText) continue;
+      if (!normalizedPrompts.some((p) => p && qText.includes(p.substring(0, Math.min(p.length, 40))))) continue;
+
+      let next = queryBlock.nextElementSibling;
+      while (next && !next.matches(SELECTORS.responseBlock)) next = next.nextElementSibling;
+      if (!next) continue;
+
+      const downloadBtns = next.querySelectorAll(SELECTORS.generatedDownloadButton);
+      downloadBtns.forEach((btn, idx) => {
+        setTimeout(() => clickElement(btn), (clicked + idx + 1) * 1200);
+      });
+      clicked += downloadBtns.length;
+    }
+
+    return clicked;
+  }
+
+  async function runBatch(files, prompts, delayMs, autoDownloadAfter) {
     if (!Array.isArray(files) || files.length === 0) throw new Error('No files received by content script.');
 
     console.clear();
@@ -197,8 +220,7 @@
       const prompt = prompts[i] || prompts[prompts.length - 1];
       const fileName = file?.name || `image_${i + 1}.png`;
 
-      console.log(`
-🟩 Item ${i + 1}/${files.length}: ${fileName}`);
+      console.log(`\n🟩 Item ${i + 1}/${files.length}: ${fileName}`);
       await attachFile(file);
       await clearAndType(prompt);
       await delay(500);
@@ -207,13 +229,16 @@
       await delay(delayMs);
     }
 
+    if (autoDownloadAfter) {
+      const count = await autoDownloadGeneratedByPrompt(prompts);
+      console.log(`📥 Auto-download clicks triggered: ${count}`);
+    }
+
     console.log('%c🎉 All prompts completed!', 'color: cyan; font-weight: bold;');
   }
 
   async function downloadByPrompts(promptList) {
-    const prompts = promptList
-      .map((p) => p.trim().replace(/^["']|["'],?$/g, ''))
-      .filter(Boolean);
+    const prompts = promptList.map((p) => p.trim().replace(/^["']|["'],?$/g, '')).filter(Boolean);
 
     const containers = document.querySelectorAll(SELECTORS.messageContainers);
     let matchCount = 0;
@@ -261,7 +286,7 @@
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type === 'RUN_IMAGE_EDIT_BATCH') {
-      runBatch(message.files || [], message.prompts || [], message.delayMs || 1500)
+      runBatch(message.files || [], message.prompts || [], message.delayMs || 1500, message.autoDownloadAfter !== false)
         .then(() => sendResponse({ ok: true }))
         .catch((err) => {
           console.error('Batch failed:', err);

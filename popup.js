@@ -57,7 +57,12 @@ document.getElementById('run').addEventListener('click', async () => {
       return;
     }
     if (!prompts.length) {
-      setStatus('Add at least 1 prompt.');
+      setStatus('Add prompts with one prompt per line.');
+      return;
+    }
+
+    if (!(prompts.length === 1 || prompts.length === files.length)) {
+      setStatus(`Use either 1 prompt for all images OR exactly ${files.length} prompts (one per line).`);
       return;
     }
 
@@ -69,7 +74,8 @@ document.getElementById('run').addEventListener('click', async () => {
       type: 'RUN_IMAGE_EDIT_BATCH',
       files: serializedFiles,
       prompts,
-      delayMs
+      delayMs,
+      autoDownloadAfter: true
     });
 
     if (result?.ok === false) {
@@ -77,7 +83,7 @@ document.getElementById('run').addEventListener('click', async () => {
       return;
     }
 
-    setStatus('Batch completed. Check page console for details.');
+    setStatus('Batch + auto-download completed. Check page console for details.');
   } catch (err) {
     setStatus(`Error: ${err.message}`);
   }
