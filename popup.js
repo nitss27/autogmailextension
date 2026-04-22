@@ -25,6 +25,27 @@ async function sendMessage(payload) {
   return chrome.tabs.sendMessage(tabId, payload);
 }
 
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error(`Failed reading file: ${file.name}`));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function serializeFiles(files) {
+  const out = [];
+  for (const file of files) {
+    out.push({
+      name: file.name,
+      type: file.type || 'image/png',
+      dataUrl: await fileToDataUrl(file)
+    });
+  }
+  return out;
+}
+
 document.getElementById('run').addEventListener('click', async () => {
   try {
     const prompts = parsePrompts();
@@ -40,9 +61,23 @@ document.getElementById('run').addEventListener('click', async () => {
       return;
     }
 
-    setStatus(`Starting ${files.length} image(s)...`);
-    await sendMessage({ type: 'RUN_IMAGE_EDIT_BATCH', files, prompts, delayMs });
-    setStatus('Batch started. Check page console for progress.');
+    setStatus(`Preparing ${files.length} image(s)...`);
+    const serializedFiles = await serializeFiles(files);
+
+    setStatus(`Starting ${serializedFiles.length} image(s)...`);
+    const result = await sendMessage({
+      type: 'RUN_IMAGE_EDIT_BATCH',
+      files: serializedFiles,
+      prompts,
+      delayMs
+    });
+
+    if (result?.ok === false) {
+      setStatus(`Batch failed: ${result.error || 'unknown error'}`);
+      return;
+    }
+
+    setStatus('Batch completed. Check page console for details.');
   } catch (err) {
     setStatus(`Error: ${err.message}`);
   }

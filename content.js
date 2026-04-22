@@ -1,10 +1,25 @@
 (function () {
   const SELECTORS = {
     composerInput: 'div[contenteditable="true"]',
-    sendButton: 'button[aria-label*="Send message"]',
-    stopButton: 'button[aria-label*="Stop"]',
-    attachToggle: 'span.mat-mdc-button-touch-target',
-    uploadMenuButton: '[data-test-id="local-images-files-uploader-button"]',
+    sendButton: [
+      'button[aria-label*="Send message"]',
+      'button[aria-label*="Send"]'
+    ],
+    stopButton: [
+      'button[aria-label*="Stop"]',
+      'button[mattooltip*="Stop"]'
+    ],
+    attachToggle: [
+      'button[aria-label*="Add files"]',
+      'button[aria-label*="Attach"]',
+      'span.mat-mdc-button-touch-target'
+    ],
+    uploadMenuButton: [
+      '[data-test-id="local-images-files-uploader-button"]',
+      '[data-test-id="uploader-images-files-button-advanced"] button',
+      'images-files-uploader button'
+    ],
+    hiddenUploadTrigger: '.hidden-local-file-image-selector-button',
     fileInput: 'input[type="file"]',
     messageContainers: '[class*="container_b7e1cb"], [class*="messageContent"]',
     downloadLinks: 'a[aria-label="Download"]'
@@ -12,14 +27,34 @@
 
   const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 
-  async function waitForSelector(selector, timeoutMs = 10000) {
+  function isVisible(el) {
+    if (!el) return false;
+    const style = window.getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
+  }
+
+  function findFirstVisible(selectors) {
+    const arr = Array.isArray(selectors) ? selectors : [selectors];
+    for (const selector of arr) {
+      const nodes = document.querySelectorAll(selector);
+      for (const node of nodes) {
+        if (isVisible(node) || selector === 'span.mat-mdc-button-touch-target') {
+          return node;
+        }
+      }
+    }
+    return null;
+  }
+
+  async function waitForSelector(selectors, timeoutMs = 10000) {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
-      const el = document.querySelector(selector);
+      const el = findFirstVisible(selectors);
       if (el) return el;
-      await delay(100);
+      await delay(120);
     }
-    throw new Error(`Timeout waiting for: ${selector}`);
+    throw new Error(`Timeout waiting for: ${Array.isArray(selectors) ? selectors.join(' | ') : selectors}`);
   }
 
   async function clearAndType(text) {
@@ -32,15 +67,30 @@
     input.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
-  async function setSingleFile(file) {
-    // User-requested click flow
-    const attachTarget = await waitForSelector(SELECTORS.attachToggle, 10000);
-    attachTarget.click();
-    await delay(300);
+  function dataUrlToFile(dataUrl, name, type) {
+    const [meta, data] = dataUrl.split(',');
+    const mime = type || (meta.match(/data:(.*?);base64/) || [])[1] || 'image/png';
+    const binary = atob(data);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+    return new File([bytes], name || 'image.png', { type: mime });
+  }
 
-    const uploadBtn = await waitForSelector(SELECTORS.uploadMenuButton, 10000);
+  async function setSingleFile(fileLike) {
+    const file = fileLike instanceof File
+      ? fileLike
+      : dataUrlToFile(fileLike.dataUrl, fileLike.name, fileLike.type);
+
+    const attachTarget = await waitForSelector(SELECTORS.attachToggle, 12000);
+    attachTarget.click();
+    await delay(400);
+
+    const uploadBtn = await waitForSelector(SELECTORS.uploadMenuButton, 12000);
     uploadBtn.click();
     await delay(500);
+
+    const hiddenTrigger = document.querySelector(SELECTORS.hiddenUploadTrigger);
+    if (hiddenTrigger) hiddenTrigger.click();
 
     const input = await waitForSelector(SELECTORS.fileInput, 15000);
     const dt = new DataTransfer();
@@ -49,7 +99,7 @@
     input.dispatchEvent(new Event('input', { bubbles: true }));
     input.dispatchEvent(new Event('change', { bubbles: true }));
 
-    await delay(1200);
+    await delay(1800);
   }
 
   async function sendCurrentPromptAndWait() {
@@ -57,20 +107,24 @@
     if (sendBtn.disabled) throw new Error('Send button is disabled.');
     sendBtn.click();
 
-    await delay(1500);
-    while (document.querySelector(SELECTORS.stopButton)) {
+    await delay(1800);
+    while (findFirstVisible(SELECTORS.stopButton)) {
       await delay(1000);
     }
   }
 
   async function runBatch(files, prompts, delayMs) {
+    if (!Array.isArray(files) || files.length === 0) throw new Error('No files received by content script.');
+
     console.clear();
     console.log('%c🤖 Gemini Image Edit Batch Processor', 'color: lime; font-weight: bold;');
+
     for (let i = 0; i < files.length; i += 1) {
       const file = files[i];
       const prompt = prompts[i] || prompts[prompts.length - 1];
-      console.log(`\n🟩 Item ${i + 1}/${files.length}: ${file.name}`);
+      const fileName = file?.name || `image_${i + 1}.png`;
 
+      console.log(`\n🟩 Item ${i + 1}/${files.length}: ${fileName}`);
       await setSingleFile(file);
       await clearAndType(prompt);
       await delay(500);
@@ -78,6 +132,7 @@
       console.log('✅ Completed item.');
       await delay(delayMs);
     }
+
     console.log('%c🎉 All prompts completed!', 'color: cyan; font-weight: bold;');
   }
 
