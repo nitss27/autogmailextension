@@ -1,0 +1,1 @@
+{% assign on_sale = product.compare_at_price > product.price %}<div class="price">{% if on_sale %}<s>{{ product.compare_at_price | money }}</s>{% endif %}<strong class="{% if on_sale %}price--sale{% endif %}">{{ product.price | money }}</strong>{% if on_sale %}<span class="price__save">Save {{ product.compare_at_price | minus: product.price | money }}</span>{% endif %}</div>
